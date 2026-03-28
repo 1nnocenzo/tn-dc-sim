@@ -4,7 +4,12 @@ import numpy as np
 import copy
 from src.network import Network
 from src.node import Node
-from src.utils.quantum_gates import random_isometry, random_gate
+from src.utils.quantum_gates import (
+    random_isometry,
+    random_gate,
+    single_qubit_gate_from_name,
+    two_qubit_gate_from_name,
+)
 
 def D_tree(network_structure, D_max): #Returns the bond dimension list for each layer of tree
     return [min(2**x, D_max) for x in network_structure][:-1]
@@ -189,6 +194,73 @@ def circuit_from_edge_list(TR,edge_list,no_qubits,single_qubit_gate_ket,single_q
                 new_network.add_to_node(f"1G_B{i}",current_gates[i],0,2)
             else:   
                 new_network.add_to_node(f"1G_B{i}",current_gates[i],0,3)
+    return new_network
+
+
+def circuit_from_ir(TR, circuit_ir, single_qubit_gate_ket=None, single_qubit_gate_bra=None):
+    """
+    Builds a circuit tensor network from a CircuitIR object.
+
+    The structure is:
+    ket boundary gates (1G_Ki) -> gate sequence from IR -> bra boundary gates (1G_Bi)
+    """
+    no_qubits = circuit_ir.no_qubits
+    new_network = Network()
+    new_network.rank_all = TR
+
+    if single_qubit_gate_ket is None:
+        single_qubit_gate_ket = np.identity(2)
+    if single_qubit_gate_bra is None:
+        single_qubit_gate_bra = np.identity(2)
+
+    current_node = {}
+    current_leg = {}
+
+    for i in range(no_qubits):
+        A = Node(f"1G_K{i}", 2, [2, 2], single_qubit_gate_ket)
+        new_network.add_node(A)
+        current_node[i] = f"1G_K{i}"
+        current_leg[i] = 1
+
+    for op_index, op in enumerate(circuit_ir.operations):
+        op_name = op.name.lower()
+        q = op.qubits
+        p = op.params
+        gate_node_name = f"G{op_index}_{op_name}"
+
+        if len(q) == 1:
+            qubit = q[0]
+            assert 0 <= qubit < no_qubits, "Single-qubit op index out of range"
+            gate_tensor = single_qubit_gate_from_name(op_name, p)
+            A = Node(gate_node_name, 2, [2, 2], gate_tensor)
+            new_network.add_node(A)
+            new_network.add_to_node(current_node[qubit], gate_node_name, current_leg[qubit], 0)
+            current_node[qubit] = gate_node_name
+            current_leg[qubit] = 1
+
+        elif len(q) == 2:
+            qubit_1 = q[0]
+            qubit_2 = q[1]
+            assert qubit_1 != qubit_2, "Two-qubit op uses the same qubit twice"
+            assert 0 <= qubit_1 < no_qubits and 0 <= qubit_2 < no_qubits, "Two-qubit op index out of range"
+            gate_tensor = two_qubit_gate_from_name(op_name, p)
+            A = Node(gate_node_name, 4, [2, 2, 2, 2], gate_tensor)
+            new_network.add_node(A)
+            new_network.add_to_node(current_node[qubit_1], gate_node_name, current_leg[qubit_1], 0)
+            new_network.add_to_node(current_node[qubit_2], gate_node_name, current_leg[qubit_2], 1)
+            current_node[qubit_1] = gate_node_name
+            current_node[qubit_2] = gate_node_name
+            current_leg[qubit_1] = 2
+            current_leg[qubit_2] = 3
+
+        else:
+            raise ValueError(f"Operation '{op.name}' acts on {len(q)} qubits. Only 1- and 2-qubit gates are supported.")
+
+    for i in range(no_qubits):
+        A = Node(f"1G_B{i}", 2, [2, 2], single_qubit_gate_bra)
+        new_network.add_node(A)
+        new_network.add_to_node(f"1G_B{i}", current_node[i], 0, current_leg[i])
+
     return new_network
 
 def full_network_from_edge_list(Ket,Circuit,Bra,no_qubits):

@@ -25,6 +25,112 @@ Install all the required dependencies with `pip install -r requirements.txt`.
 | `Dmax`               | List of max bond dimensions to use in the tensor network |
 | `runs`               | Number of independent simulations to average over |
 
+## Main Input Mode
+
+`main.py` now supports two execution paths:
+
+- `input_mode = "legacy"`: uses the original `random` / `qaoa` pipeline.
+- `input_mode = "qasm3"`: parses OpenQASM 3 into `CircuitIR` and runs the generic non-dynamic DMRG path.
+
+In `qasm3` mode:
+- set `qasm_source_mode` to `"inline"` or `"file"`,
+- set `qasm_text` or `qasm_file_path`,
+- optionally tune `qasm_apply_transpile` and `qasm_optimization_level`.
+
+## CircuitIR and QASM3 Conversion
+
+The project now includes a minimal internal circuit representation (`CircuitIR`) and a converter from OpenQASM 3:
+
+- `src/circuit_ir.py`
+- `src/utils/qasm3_to_ir.py`
+
+Example usage:
+
+```python
+from src.utils.qasm3_to_ir import qasm3_to_circuit_ir
+
+qasm_text = """
+OPENQASM 3.0;
+include "stdgates.inc";
+qubit[2] q;
+h q[0];
+cx q[0], q[1];
+"""
+
+ir = qasm3_to_circuit_ir(
+    qasm_text,
+    basis_gates=["id", "x", "y", "z", "h", "sx", "rx", "ry", "rz", "cx", "cz"],
+    apply_transpile=True,
+    optimization_level=0,
+)
+
+print(ir)
+print(ir.operations)
+```
+
+Current converter scope:
+- Supports only non-dynamic circuits
+- Supports 1- and 2-qubit gates
+- Rejects operations using classical bits (`measure`, `reset`, control flow, etc.)
+
+To run the DMRG simulation path directly from OpenQASM 3:
+
+```python
+from src.simulation import DMRG_from_qasm3
+from src.utils.TN_gen import D_tree
+
+qasm_text = """
+OPENQASM 3.0;
+include "stdgates.inc";
+qubit[3] q;
+h q[0];
+cx q[0], q[1];
+rz(0.2) q[2];
+"""
+
+network_structure = [1, 3]
+D = D_tree(network_structure, D_max=4)
+
+fidelity = DMRG_from_qasm3(
+    compression_steps=1,
+    no_sweeps=2,
+    D=D,
+    network_structure=network_structure,
+    qasm_text=qasm_text,
+    network_type="tree",
+    optimization_level=0,
+)
+
+print("Final fidelity:", fidelity)
+```
+
+To also get the final approximate quantum state vector:
+
+```python
+fidelity, state = DMRG_from_qasm3(
+    compression_steps=1,
+    no_sweeps=2,
+    D=D,
+    network_structure=network_structure,
+    qasm_text=qasm_text,
+    network_type="tree",
+    optimization_level=0,
+    return_state=True,
+)
+print(fidelity, state.shape)
+```
+
+## Notebook Tests
+
+A smoke-test notebook is available at:
+
+- `notebooks/qasm3_dmrg_smoke_tests.ipynb`
+
+It includes:
+- QASM3 -> CircuitIR conversion check
+- TTN/MPS DMRG runs on a small non-dynamic circuit
+- expected failure test on a dynamic instruction (`measure`)
+
 
 ## Reference
 

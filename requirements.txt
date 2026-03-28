@@ -7,4 +7,6 @@ tqdm
 jax
 jaxlib
 matplotlib
-optuna 
+optuna
+qiskit
+qiskit_qasm3_import>=0.6.0
