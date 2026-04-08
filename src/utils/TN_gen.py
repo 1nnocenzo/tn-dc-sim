@@ -107,20 +107,22 @@ def MPS(D,node_name,TR,initial):
     
     if initial == "zero":
         for i in range(len(D)+1):
-            zero_2 = np.zeros((1,2))
-            zero_2[0,0] = 1
-            zero_3 = np.zeros((1,2,1))
-            zero_3[0,0,0] = 1
             if i == 0:
-                A = Node(node_name+f"{i}",2,[D[i],2],zero_2)
+                tensor = np.zeros((D[i], 2), dtype=complex)
+                tensor[0, 0] = 1.0
+                A = Node(node_name+f"{i}",2,[D[i],2],tensor)
                 N.add_node(A)
             elif i == len(D):
-                A = Node(node_name+f"{i}",2,[D[i-1],2],zero_2)
+                tensor = np.zeros((D[i-1], 2), dtype=complex)
+                tensor[0, 0] = 1.0
+                A = Node(node_name+f"{i}",2,[D[i-1],2],tensor)
                 N.add_node(A)
                 idx = 0 if (i-1 == 0) else 2
                 N.add_to_node(node_name+f"{i-1}",node_name+f"{i}",idx,0)
             else:
-                A = Node(node_name+f"{i}",3,[D[i-1],2,D[i]],zero_3)
+                tensor = np.zeros((D[i-1], 2, D[i]), dtype=complex)
+                tensor[0, 0, 0] = 1.0
+                A = Node(node_name+f"{i}",3,[D[i-1],2,D[i]],tensor)
                 N.add_node(A)
                 idx = 0 if (i-1 == 0) else 2
                 N.add_to_node(node_name+f"{i-1}",node_name+f"{i}",idx,0)    

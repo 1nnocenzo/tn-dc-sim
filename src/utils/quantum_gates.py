@@ -221,6 +221,12 @@ def single_qubit_gate_from_name(name, params=None):
         assert len(params) == 3, f"{gate_name} expects three parameters"
         U = u_gate(params[0], params[1], params[2])
         return _single_qubit_matrix_to_tensor(U)
+    if gate_name == "__proj0__":
+        U = np.array([[1, 0], [0, 0]], dtype=complex)
+        return _single_qubit_matrix_to_tensor(U)
+    if gate_name == "__proj1__":
+        U = np.array([[0, 0], [0, 1]], dtype=complex)
+        return _single_qubit_matrix_to_tensor(U)
 
     raise ValueError(f"Unsupported single-qubit gate '{name}'")
 

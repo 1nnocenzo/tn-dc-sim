@@ -90,6 +90,21 @@ def pre_order_traversal(network):
     dfs(root)
     return order
 
+def _trailing_integer_suffix(name):
+    idx = len(name) - 1
+    while idx >= 0 and name[idx].isdigit():
+        idx -= 1
+    if idx == len(name) - 1:
+        raise ValueError(f"Node name '{name}' has no trailing integer suffix.")
+    return int(name[idx + 1 :])
+
+def _mps_linear_traversal(network):
+    """
+    Returns MPS nodes ordered from left to right.
+    Assumes node names include a trailing site index (e.g. Bra0, Bra1, ...).
+    """
+    return sorted(list(network.nodes.keys()), key=_trailing_integer_suffix)
+
 def all_paths(network):
     """
     Generates all sequential paths needed for one half of a DMRG sweep.
@@ -173,8 +188,8 @@ def qr_series(network,path):
 
         network.replace_tensor(name1,Q)
         network.replace_tensor(name2,M)
-    
-def sweep(ns,full_network,bra):
+
+def sweep(ns,full_network,bra, network_type="tree"):
     """
     Core iterative optimization algorithm (a DMRG-like sweep). It finds the
     best tensor network approximation (`bra`) for the state produced by the `full_network`.
@@ -187,12 +202,32 @@ def sweep(ns,full_network,bra):
     Returns:
         np.ndarray: An array containing the fidelity at each step of the sweep.
     """
+    partial_fidelity = np.zeros((ns,bra.number_nodes))
+
+    if network_type == "mps":
+        L = _mps_linear_traversal(bra)
+        col_index = {node_name: idx for idx, node_name in enumerate(L)}
+        for i in range(ns):
+            order = L if i % 2 == 0 else L[::-1]
+            for k, j in enumerate(order):
+                F = full_network.contract_all_but_one(j)
+                f = oe.contract("...,...->", F, np.conjugate(F))
+                A = np.conjugate(F) / np.sqrt(f)
+                bra.replace_tensor(j, A)
+                full_network.replace_tensor(j, A)
+                if k != len(order) - 1:
+                    next_node = order[k + 1]
+                    assert next_node in bra.nodes[j].neighbours, "Invalid MPS sweep order"
+                    qr_series(bra, [j, next_node])
+                    full_network.replace_tensor(j, bra.nodes[j].tensor)
+                    full_network.replace_tensor(next_node, bra.nodes[next_node].tensor)
+                partial_fidelity[i, col_index[j]] = f.real
+        return partial_fidelity
+
     m = -1
     path = all_paths(bra)
-    partial_fidelity = np.zeros((ns,bra.number_nodes))
     L = pre_order_traversal(bra)
     for i in range(ns):
-        # L = list(bra.nodes.items())
         f = 0
         if i%2 == 0:
             m +=1
@@ -203,11 +238,9 @@ def sweep(ns,full_network,bra):
             counter = -1
             p = path[::-1]
         for k in range(len(L)):
-            # j,v = L[m]
             j = L[m]
-            # print(v.dim)
             F = full_network.contract_all_but_one(j)
-            f = oe.contract("...,...->", F, np.conjugate(F)) 
+            f = oe.contract("...,...->", F, np.conjugate(F))
             A = np.conjugate(F)/np.sqrt(f)
             bra.replace_tensor(j,A)
             full_network.replace_tensor(j,A)
@@ -218,9 +251,6 @@ def sweep(ns,full_network,bra):
                 for names in p_:
                     full_network.replace_tensor(names,bra.nodes[names].tensor)
             partial_fidelity[i,m] = f.real
-            # print(partial_fidelity)
-            # if i==0:
-            #     assert np.round(partial_fidelity[i,m],4) >= np.round(partial_fidelity[i,m-1],4), print(partial_fidelity[i,m],partial_fidelity[i,m-1])
             m +=counter
     return partial_fidelity
 
@@ -297,15 +327,15 @@ def _sample_measurements_from_state(state, no_qubits, n_samples_final, seed=None
     return counts, None
 
 
-def _initialize_ket_bra(network_type, no_qubits, D, network_structure):
+def _initialize_ket_bra(network_type, no_qubits, D, network_structure, bra_initial="random"):
     if network_type == "tree":
         assert no_qubits == network_structure[-1], "Number of qubits mismatch"
         ket = Tree(D, "Ket", 0, "zero", network_structure)
-        bra = Tree(D, "Bra", ket.rank_all + 1, "random", network_structure)
+        bra = Tree(D, "Bra", ket.rank_all + 1, bra_initial, network_structure)
     elif network_type == "mps":
         assert no_qubits == len(D) + 1, "Number of qubits mismatch"
         ket = MPS(D, "Ket", 0, "zero")
-        bra = MPS(D, "Bra", ket.rank_all + 1, "random")
+        bra = MPS(D, "Bra", ket.rank_all + 1, bra_initial)
     else:
         raise ValueError("network_type must be 'tree' or 'mps'")
     return ket, bra
@@ -315,6 +345,293 @@ def _update_ket_with_bra_conjugate(ket, bra):
     for (ket_name, ket_node), (bra_name, bra_node) in zip(ket.nodes.items(), bra.nodes.items()):
         assert bra_name[3:] == ket_name[3:], "Wrong ket/bra"
         ket.replace_tensor(ket_name, np.conjugate(bra_node.tensor))
+
+
+def _update_bra_with_ket_conjugate(bra, ket):
+    for (ket_name, ket_node), (bra_name, bra_node) in zip(ket.nodes.items(), bra.nodes.items()):
+        assert bra_name[3:] == ket_name[3:], "Wrong ket/bra"
+        bra.replace_tensor(bra_name, np.conjugate(ket_node.tensor))
+
+
+def _evaluate_dynamic_condition(condition, classical_bits):
+    if condition is None:
+        return True
+
+    condition_kind = condition.get("kind")
+
+    if condition_kind == "literal":
+        return bool(condition["value"])
+
+    if condition_kind == "clbit_eq":
+        idx = condition["clbit"]
+        value = condition["value"]
+        return int(classical_bits[idx]) == int(value)
+
+    if condition_kind == "creg_eq":
+        register_bits = condition["clbits"]
+        target_value = int(condition["value"])
+        register_value = 0
+        for bit_pos, bit_index in enumerate(register_bits):
+            register_value |= (int(classical_bits[bit_index]) & 1) << bit_pos
+        return register_value == target_value
+
+    if condition_kind == "not":
+        return not _evaluate_dynamic_condition(condition["term"], classical_bits)
+
+    if condition_kind == "and":
+        for term in condition["terms"]:
+            if not _evaluate_dynamic_condition(term, classical_bits):
+                return False
+        return True
+
+    if condition_kind == "or":
+        for term in condition["terms"]:
+            if _evaluate_dynamic_condition(term, classical_bits):
+                return True
+        return False
+
+    if condition_kind == "xor":
+        if "terms" in condition:
+            terms = condition["terms"]
+        elif "lhs" in condition and "rhs" in condition:
+            terms = [condition["lhs"], condition["rhs"]]
+        else:
+            raise ValueError("xor condition expects either 'terms' or both 'lhs' and 'rhs'")
+
+        result = False
+        for term in terms:
+            result ^= _evaluate_dynamic_condition(term, classical_bits)
+        return result
+
+    raise ValueError(f"Unsupported condition kind '{condition_kind}'")
+
+
+def _build_chunk_ir_from_operations(no_qubits, operations):
+    chunk_ir = CircuitIR(no_qubits, 0)
+    for op in operations:
+        chunk_ir.add_operation(op.name, op.qubits, op.params, op.condition, op.clbits)
+    return chunk_ir
+
+
+def _apply_ir_chunk_with_dmrg(ket, bra, chunk_ir, no_qubits, no_sweeps, network_type):
+    circ = circuit_from_ir(bra.rank_all + 1, chunk_ir)
+    N = full_network_from_edge_list(ket, circ, bra, no_qubits)
+    f = sweep(no_sweeps, N, bra, network_type=network_type)
+    F_ = np.max(f[-1, :])
+    del circ
+    del N
+    gc.collect()
+    return F_
+
+
+def _node_axis_for_leg(network, leg_symbol):
+    for node_name, node in network.nodes.items():
+        if leg_symbol in node.subscript:
+            return node_name, node.subscript.index(leg_symbol)
+    raise ValueError("Unable to locate target physical leg in the network.")
+
+
+def _apply_single_qubit_operator_to_network(network, no_qubits, target_qubit, operator):
+    ordered_legs = _ordered_open_legs_for_physical_qubits(network, no_qubits)
+    target_leg = ordered_legs[target_qubit]
+    node_name, axis = _node_axis_for_leg(network, target_leg)
+    node = network.nodes[node_name]
+
+    updated_tensor = np.tensordot(operator, node.tensor, axes=([1], [axis]))
+    updated_tensor = np.moveaxis(updated_tensor, 0, axis)
+    network.replace_tensor(node_name, updated_tensor)
+
+
+def _rescale_network_state(network, scale):
+    first_node_name = list(network.nodes.keys())[0]
+    first_node = network.nodes[first_node_name]
+    network.replace_tensor(first_node_name, first_node.tensor * scale)
+
+
+def _measurement_probability_from_tn(ket, bra, no_qubits, target_qubit, outcome):
+    assert outcome == 0 or outcome == 1, "outcome must be 0 or 1"
+
+    projector_name = "__proj0__" if outcome == 0 else "__proj1__"
+    proj_ir = CircuitIR(no_qubits, 0)
+    proj_ir.add_operation(projector_name, [target_qubit])
+
+    circ = circuit_from_ir(bra.rank_all + 1, proj_ir)
+    N = full_network_from_edge_list(ket, circ, bra, no_qubits)
+    value = N.contract_all()
+    p = float(np.real(np.asarray(value).reshape(-1)[0]))
+    p = min(max(p, 0.0), 1.0)
+
+    del circ
+    del N
+    gc.collect()
+    return p
+
+
+def _sample_binary_outcome(p0, rng):
+    p0 = min(max(float(p0), 0.0), 1.0)
+    p1 = 1.0 - p0
+    if p0 <= 0.0:
+        return 1, p1
+    if p1 <= 0.0:
+        return 0, p0
+    outcome = 0 if rng.random() < p0 else 1
+    p_outcome = p0 if outcome == 0 else p1
+    return outcome, p_outcome
+
+
+def _collapse_qubit_single_path(ket, bra, no_qubits, target_qubit, outcome, outcome_probability):
+    projector = np.array([[1.0, 0.0], [0.0, 0.0]], dtype=complex) if outcome == 0 else np.array([[0.0, 0.0], [0.0, 1.0]], dtype=complex)
+    _apply_single_qubit_operator_to_network(ket, no_qubits, target_qubit, projector)
+    if outcome_probability > 0.0:
+        _rescale_network_state(ket, 1.0 / np.sqrt(outcome_probability))
+    _update_bra_with_ket_conjugate(bra, ket)
+
+
+def DMRG_dynamic_single_path_from_circuit_ir(compression_steps, no_sweeps, D, network_structure, circuit_ir, network_type, seed=None, return_state=False, return_bra=False, return_classical_bits=False, return_branch_probability=False, n_samples_final=None, return_counts=False, return_memory=False):
+    """
+    Single-path dynamic simulation using TTN/MPS + DMRG chunks.
+
+    `compression_steps` is interpreted as the maximum number of unitary
+    operations accumulated in a chunk before running a DMRG sweep.
+    Non-unitary ops (measure/reset) always flush the current unitary chunk.
+    """
+    assert no_sweeps % 2 == 0 and no_sweeps > 0, "Number of sweeps must be a positive even integer"
+    assert compression_steps >= 1, "compression_steps must be >= 1"
+    assert isinstance(circuit_ir, CircuitIR), "circuit_ir must be a CircuitIR instance"
+    if return_counts or return_memory:
+        assert n_samples_final is not None and n_samples_final > 0, "n_samples_final must be set when requesting final sampling"
+
+    no_qubits = circuit_ir.no_qubits
+    no_clbits = circuit_ir.no_clbits
+
+    ket, bra = _initialize_ket_bra(network_type, no_qubits, D, network_structure, bra_initial="zero")
+    _update_ket_with_bra_conjugate(ket, bra)
+
+    classical_bits = np.zeros(no_clbits, dtype=int)
+    rng = np.random.default_rng(seed)
+    branch_probability = 1.0
+    fidelity_terms = []
+    unitary_buffer = []
+
+    def flush_unitary_chunk():
+        nonlocal unitary_buffer
+        if len(unitary_buffer) == 0:
+            return
+        chunk_ir = _build_chunk_ir_from_operations(no_qubits, unitary_buffer)
+        F_ = _apply_ir_chunk_with_dmrg(ket, bra, chunk_ir, no_qubits, no_sweeps, network_type)
+        fidelity_terms.append(F_)
+        _update_ket_with_bra_conjugate(ket, bra)
+        unitary_buffer = []
+
+    for op in circuit_ir.operations:
+        if not _evaluate_dynamic_condition(op.condition, classical_bits):
+            continue
+
+        op_name = op.name.lower()
+
+        if op_name == "measure":
+            flush_unitary_chunk()
+            assert len(op.qubits) == 1 and len(op.clbits) == 1, "measure expects one qubit and one clbit"
+            target_qubit = op.qubits[0]
+            target_clbit = op.clbits[0]
+
+            _update_ket_with_bra_conjugate(ket, bra)
+            p0 = _measurement_probability_from_tn(ket, bra, no_qubits, target_qubit, 0)
+            outcome, p_outcome = _sample_binary_outcome(p0, rng)
+            branch_probability *= p_outcome
+
+            _collapse_qubit_single_path(ket, bra, no_qubits, target_qubit, outcome, p_outcome)
+            classical_bits[target_clbit] = outcome
+            continue
+
+        if op_name == "reset":
+            flush_unitary_chunk()
+            assert len(op.qubits) == 1, "reset expects one qubit"
+            target_qubit = op.qubits[0]
+
+            _update_ket_with_bra_conjugate(ket, bra)
+            p0 = _measurement_probability_from_tn(ket, bra, no_qubits, target_qubit, 0)
+            outcome, p_outcome = _sample_binary_outcome(p0, rng)
+            branch_probability *= p_outcome
+
+            _collapse_qubit_single_path(ket, bra, no_qubits, target_qubit, outcome, p_outcome)
+
+            if outcome == 1:
+                x_gate = np.array([[0.0, 1.0], [1.0, 0.0]], dtype=complex)
+                _apply_single_qubit_operator_to_network(ket, no_qubits, target_qubit, x_gate)
+                _update_bra_with_ket_conjugate(bra, ket)
+            continue
+
+        assert len(op.qubits) > 0 and len(op.qubits) <= 2, "Dynamic path supports only 1- and 2-qubit unitary ops"
+        unitary_buffer.append(op)
+        if len(unitary_buffer) >= compression_steps:
+            flush_unitary_chunk()
+
+    flush_unitary_chunk()
+
+    if len(fidelity_terms) == 0:
+        final_fidelity = 1.0
+    else:
+        final_fidelity = np.cumprod(np.array(fidelity_terms))[-1]
+
+    need_state = return_state or return_counts or return_memory
+    final_state = None
+    if need_state:
+        final_state = _state_vector_from_bra(bra, no_qubits)
+
+    counts = None
+    memory = None
+    if return_counts or return_memory:
+        counts, memory = _sample_measurements_from_state(
+            final_state, no_qubits, n_samples_final, seed=seed, return_memory=return_memory
+        )
+
+    outputs = [final_fidelity]
+    if return_branch_probability:
+        outputs.append(branch_probability)
+    if return_classical_bits:
+        outputs.append(classical_bits.copy())
+    if return_state:
+        outputs.append(final_state)
+    if return_bra:
+        outputs.append(bra)
+    if return_counts:
+        outputs.append(counts)
+    if return_memory:
+        outputs.append(memory)
+
+    if len(outputs) == 1:
+        return outputs[0]
+    return tuple(outputs)
+
+
+def DMRG_dynamic_single_path_from_qasm3(compression_steps, no_sweeps, D, network_structure, qasm_text, network_type, seed=None, return_state=False, return_bra=False, return_classical_bits=False, return_branch_probability=False, basis_gates=None, apply_transpile=False, optimization_level=0, n_samples_final=None, return_counts=False, return_memory=False):
+    """
+    Parses dynamic OpenQASM 3 into CircuitIR and runs single-path dynamic TTN/MPS simulation.
+    """
+    circuit_ir = qasm3_to_circuit_ir(
+        qasm_text,
+        basis_gates=basis_gates,
+        apply_transpile=apply_transpile,
+        optimization_level=optimization_level,
+        allow_dynamic=True,
+    )
+    return DMRG_dynamic_single_path_from_circuit_ir(
+        compression_steps=compression_steps,
+        no_sweeps=no_sweeps,
+        D=D,
+        network_structure=network_structure,
+        circuit_ir=circuit_ir,
+        network_type=network_type,
+        seed=seed,
+        return_state=return_state,
+        return_bra=return_bra,
+        return_classical_bits=return_classical_bits,
+        return_branch_probability=return_branch_probability,
+        n_samples_final=n_samples_final,
+        return_counts=return_counts,
+        return_memory=return_memory,
+    )
 
 
 def DMRG_from_circuit_ir(compression_steps, no_sweeps, D, network_structure, circuit_ir, network_type, return_state=False, return_bra=False, n_samples_final=None, seed=None, return_counts=False, return_memory=False):
@@ -363,7 +680,7 @@ def DMRG_from_circuit_ir(compression_steps, no_sweeps, D, network_structure, cir
         N = full_network_from_edge_list(ket, circ, bra, no_qubits)
         print("Memory = ", bra.memory_footprint())
         start_time = time.time()
-        f = sweep(no_sweeps, N, bra)
+        f = sweep(no_sweeps, N, bra, network_type=network_type)
         F_ = np.max(f[-1, :])
         Fid.append(F_)
 
@@ -495,7 +812,7 @@ def DMRG(compression_steps,depth, no_sweeps,no_qubits,D,network_structure,full_e
             N = full_network_from_edge_list(ket,circ,bra,no_qubits)
             print("Memory = ", bra.memory_footprint())
             start_time = time.time()
-            f = sweep(no_sweeps,N,bra)
+            f = sweep(no_sweeps,N,bra, network_type=network_type)
             F_ = np.max(f[-1,:])
             Fid.append(F_)
 
@@ -515,7 +832,7 @@ def DMRG(compression_steps,depth, no_sweeps,no_qubits,D,network_structure,full_e
             N = full_network_from_edge_list(ket,circ,bra,no_qubits)
             print("Memory = ", bra.memory_footprint())
             start_time = time.time()
-            f = sweep(no_sweeps,N,bra)
+            f = sweep(no_sweeps,N,bra, network_type=network_type)
             F_ = np.max(f[-1,:])
             Fid.append(F_)
 
@@ -547,7 +864,7 @@ def DMRG(compression_steps,depth, no_sweeps,no_qubits,D,network_structure,full_e
             print("Number of 2 qubit gates:",len(partial_edge_list[i+1]))
 
             start_time = time.time()
-            f = sweep(no_sweeps,N,bra)
+            f = sweep(no_sweeps,N,bra, network_type=network_type)
             F_ = np.max(f[-1,:])
             Fid.append(F_)
 
