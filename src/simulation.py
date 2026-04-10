@@ -4,6 +4,7 @@ import numpy as np
 import opt_einsum as oe
 import time
 import gc
+import copy
 from collections import deque
 
 from src.network import Network
@@ -485,6 +486,416 @@ def _collapse_qubit_single_path(ket, bra, no_qubits, target_qubit, outcome, outc
     if outcome_probability > 0.0:
         _rescale_network_state(ket, 1.0 / np.sqrt(outcome_probability))
     _update_bra_with_ket_conjugate(bra, ket)
+
+
+def _flush_dynamic_branch_unitary_buffer(branch, no_qubits, no_sweeps, network_type):
+    if len(branch["unitary_buffer"]) == 0:
+        return
+    chunk_ir = _build_chunk_ir_from_operations(no_qubits, branch["unitary_buffer"])
+    F_ = _apply_ir_chunk_with_dmrg(
+        branch["ket"], branch["bra"], chunk_ir, no_qubits, no_sweeps, network_type
+    )
+    branch["fidelity_terms"].append(F_)
+    _update_ket_with_bra_conjugate(branch["ket"], branch["bra"])
+    branch["unitary_buffer"] = []
+
+
+def _branch_final_fidelity(branch):
+    if len(branch["fidelity_terms"]) == 0:
+        return 1.0
+    return float(np.prod(np.array(branch["fidelity_terms"], dtype=float)))
+
+
+def _prune_dynamic_branches(branches, max_branches=None, probability_cutoff=0.0):
+    """
+    Prunes a branch ensemble and returns (kept_branches, dropped_probability_mass).
+
+    `probability_cutoff` and branch weights are interpreted in absolute probability
+    mass (not renormalized branch probabilities).
+    """
+    assert probability_cutoff >= 0.0, "probability_cutoff must be >= 0"
+    if max_branches is not None:
+        assert max_branches >= 1, "max_branches must be >= 1 when provided"
+
+    positive_branches = [b for b in branches if float(b["weight"]) > 0.0]
+    if len(positive_branches) == 0:
+        return [], 0.0
+
+    total_mass_before = float(sum(float(b["weight"]) for b in positive_branches))
+    kept = positive_branches
+
+    if probability_cutoff > 0.0:
+        cutoff_kept = [b for b in kept if float(b["weight"]) >= probability_cutoff]
+        if len(cutoff_kept) > 0:
+            kept = cutoff_kept
+        else:
+            # Keep the heaviest branch to avoid an empty ensemble.
+            kept = [max(kept, key=lambda x: float(x["weight"]))]
+
+    if max_branches is not None and len(kept) > max_branches:
+        kept = sorted(kept, key=lambda x: float(x["weight"]), reverse=True)[:max_branches]
+
+    total_mass_after = float(sum(float(b["weight"]) for b in kept))
+    dropped_mass = max(0.0, total_mass_before - total_mass_after)
+    return kept, dropped_mass
+
+
+def _sample_measurements_from_branch_ensemble(branches, no_qubits, n_samples_final, seed=None, return_memory=False):
+    """
+    Samples measurements from a mixed state represented as a weighted branch ensemble.
+    """
+    assert n_samples_final is not None and n_samples_final > 0, "n_samples_final must be a positive integer"
+
+    surviving_mass = float(sum(float(b["weight"]) for b in branches))
+    assert surviving_mass > 0.0, "Branch ensemble has zero surviving probability mass"
+
+    dim = 2 ** no_qubits
+    probs = np.zeros(dim, dtype=float)
+
+    for branch in branches:
+        w = float(branch["weight"]) / surviving_mass
+        if w <= 0.0:
+            continue
+        state = _state_vector_from_bra(branch["bra"], no_qubits).reshape(-1)
+        assert state.size == dim, "State size does not match no_qubits"
+        branch_probs = np.abs(state) ** 2
+        norm = float(np.sum(branch_probs))
+        assert norm > 0.0, "Encountered zero-norm branch while sampling"
+        probs += w * (branch_probs / norm)
+
+    probs_sum = float(np.sum(probs))
+    assert probs_sum > 0.0, "Mixed-state probability vector has zero norm"
+    probs = probs / probs_sum
+
+    rng = np.random.default_rng(seed)
+    sampled_indices = rng.choice(dim, size=n_samples_final, p=probs)
+
+    unique_indices, unique_counts = np.unique(sampled_indices, return_counts=True)
+    counts = {
+        format(int(idx), f"0{no_qubits}b"): int(cnt)
+        for idx, cnt in zip(unique_indices, unique_counts)
+    }
+
+    if return_memory:
+        memory = [format(int(idx), f"0{no_qubits}b") for idx in sampled_indices]
+        return counts, memory
+    return counts, None
+
+
+def DMRG_dynamic_all_branches_from_circuit_ir(
+    compression_steps,
+    no_sweeps,
+    D,
+    network_structure,
+    circuit_ir,
+    network_type,
+    max_branches=None,
+    probability_cutoff=0.0,
+    max_pruning_error=None,
+    return_branches=False,
+    return_state=False,
+    return_bra=False,
+    return_classical_bits=False,
+    return_pruning_error=False,
+    n_samples_final=None,
+    seed=None,
+    return_counts=False,
+    return_memory=False,
+):
+    """
+    Dynamic simulation that keeps all post-measurement/reset branches.
+
+    Branch pruning controls:
+    - max_branches: keeps at most this many highest-probability branches after each
+      non-unitary expansion.
+    - probability_cutoff: drops branches with absolute probability mass below cutoff.
+    - max_pruning_error: optional hard cap on discarded total probability mass.
+
+    Returns:
+        float | tuple:
+            First output is the weighted average branch fidelity over the surviving
+            ensemble (conditioned on surviving branches).
+            Optional outputs include pruning error, per-branch data, and final samples.
+    """
+    assert no_sweeps % 2 == 0 and no_sweeps > 0, "Number of sweeps must be a positive even integer"
+    assert compression_steps >= 1, "compression_steps must be >= 1"
+    assert isinstance(circuit_ir, CircuitIR), "circuit_ir must be a CircuitIR instance"
+    assert probability_cutoff >= 0.0, "probability_cutoff must be >= 0"
+    if max_branches is not None:
+        assert max_branches >= 1, "max_branches must be >= 1 when provided"
+    if max_pruning_error is not None:
+        assert 0.0 <= max_pruning_error <= 1.0, "max_pruning_error must be in [0, 1]"
+    if return_counts or return_memory:
+        assert n_samples_final is not None and n_samples_final > 0, "n_samples_final must be set when requesting final sampling"
+
+    no_qubits = circuit_ir.no_qubits
+    no_clbits = circuit_ir.no_clbits
+
+    ket, bra = _initialize_ket_bra(
+        network_type, no_qubits, D, network_structure, bra_initial="zero"
+    )
+    _update_ket_with_bra_conjugate(ket, bra)
+
+    branches = [
+        {
+            "ket": ket,
+            "bra": bra,
+            "classical_bits": np.zeros(no_clbits, dtype=int),
+            "weight": 1.0,
+            "fidelity_terms": [],
+            "unitary_buffer": [],
+        }
+    ]
+
+    def enforce_pruning_error_bound(current_branches):
+        if max_pruning_error is None:
+            return
+        surviving_mass = float(sum(float(b["weight"]) for b in current_branches))
+        pruning_error = max(0.0, 1.0 - surviving_mass)
+        assert pruning_error <= max_pruning_error + 1e-12, (
+            f"Pruning error {pruning_error} exceeded max_pruning_error={max_pruning_error}"
+        )
+
+    for op in circuit_ir.operations:
+        next_branches = []
+        op_name = op.name.lower()
+
+        for branch in branches:
+            classical_bits = branch["classical_bits"]
+            if not _evaluate_dynamic_condition(op.condition, classical_bits):
+                next_branches.append(branch)
+                continue
+
+            if op_name == "measure":
+                _flush_dynamic_branch_unitary_buffer(branch, no_qubits, no_sweeps, network_type)
+                assert len(op.qubits) == 1 and len(op.clbits) == 1, "measure expects one qubit and one clbit"
+                target_qubit = op.qubits[0]
+                target_clbit = op.clbits[0]
+
+                _update_ket_with_bra_conjugate(branch["ket"], branch["bra"])
+                p0 = _measurement_probability_from_tn(branch["ket"], branch["bra"], no_qubits, target_qubit, 0)
+                p0 = min(max(float(p0), 0.0), 1.0)
+                p1 = 1.0 - p0
+
+                if p0 > 0.0:
+                    ket0 = copy.deepcopy(branch["ket"])
+                    bra0 = copy.deepcopy(branch["bra"])
+                    _collapse_qubit_single_path(ket0, bra0, no_qubits, target_qubit, 0, p0)
+                    bits0 = classical_bits.copy()
+                    bits0[target_clbit] = 0
+                    next_branches.append(
+                        {
+                            "ket": ket0,
+                            "bra": bra0,
+                            "classical_bits": bits0,
+                            "weight": float(branch["weight"]) * p0,
+                            "fidelity_terms": list(branch["fidelity_terms"]),
+                            "unitary_buffer": [],
+                        }
+                    )
+
+                if p1 > 0.0:
+                    ket1 = copy.deepcopy(branch["ket"])
+                    bra1 = copy.deepcopy(branch["bra"])
+                    _collapse_qubit_single_path(ket1, bra1, no_qubits, target_qubit, 1, p1)
+                    bits1 = classical_bits.copy()
+                    bits1[target_clbit] = 1
+                    next_branches.append(
+                        {
+                            "ket": ket1,
+                            "bra": bra1,
+                            "classical_bits": bits1,
+                            "weight": float(branch["weight"]) * p1,
+                            "fidelity_terms": list(branch["fidelity_terms"]),
+                            "unitary_buffer": [],
+                        }
+                    )
+                continue
+
+            if op_name == "reset":
+                _flush_dynamic_branch_unitary_buffer(branch, no_qubits, no_sweeps, network_type)
+                assert len(op.qubits) == 1, "reset expects one qubit"
+                target_qubit = op.qubits[0]
+
+                _update_ket_with_bra_conjugate(branch["ket"], branch["bra"])
+                p0 = _measurement_probability_from_tn(branch["ket"], branch["bra"], no_qubits, target_qubit, 0)
+                p0 = min(max(float(p0), 0.0), 1.0)
+                p1 = 1.0 - p0
+
+                if p0 > 0.0:
+                    ket0 = copy.deepcopy(branch["ket"])
+                    bra0 = copy.deepcopy(branch["bra"])
+                    _collapse_qubit_single_path(ket0, bra0, no_qubits, target_qubit, 0, p0)
+                    next_branches.append(
+                        {
+                            "ket": ket0,
+                            "bra": bra0,
+                            "classical_bits": classical_bits.copy(),
+                            "weight": float(branch["weight"]) * p0,
+                            "fidelity_terms": list(branch["fidelity_terms"]),
+                            "unitary_buffer": [],
+                        }
+                    )
+
+                if p1 > 0.0:
+                    ket1 = copy.deepcopy(branch["ket"])
+                    bra1 = copy.deepcopy(branch["bra"])
+                    _collapse_qubit_single_path(ket1, bra1, no_qubits, target_qubit, 1, p1)
+                    x_gate = np.array([[0.0, 1.0], [1.0, 0.0]], dtype=complex)
+                    _apply_single_qubit_operator_to_network(ket1, no_qubits, target_qubit, x_gate)
+                    _update_bra_with_ket_conjugate(bra1, ket1)
+                    next_branches.append(
+                        {
+                            "ket": ket1,
+                            "bra": bra1,
+                            "classical_bits": classical_bits.copy(),
+                            "weight": float(branch["weight"]) * p1,
+                            "fidelity_terms": list(branch["fidelity_terms"]),
+                            "unitary_buffer": [],
+                        }
+                    )
+                continue
+
+            assert len(op.qubits) > 0 and len(op.qubits) <= 2, "Dynamic path supports only 1- and 2-qubit unitary ops"
+            branch["unitary_buffer"].append(op)
+            if len(branch["unitary_buffer"]) >= compression_steps:
+                _flush_dynamic_branch_unitary_buffer(branch, no_qubits, no_sweeps, network_type)
+            next_branches.append(branch)
+
+        branches = next_branches
+
+        if op_name == "measure" or op_name == "reset":
+            branches, _ = _prune_dynamic_branches(
+                branches, max_branches=max_branches, probability_cutoff=probability_cutoff
+            )
+            enforce_pruning_error_bound(branches)
+
+    for branch in branches:
+        _flush_dynamic_branch_unitary_buffer(branch, no_qubits, no_sweeps, network_type)
+
+    branches, _ = _prune_dynamic_branches(
+        branches, max_branches=max_branches, probability_cutoff=probability_cutoff
+    )
+    enforce_pruning_error_bound(branches)
+
+    surviving_mass = float(sum(float(b["weight"]) for b in branches))
+    pruning_error_bound = max(0.0, 1.0 - surviving_mass)
+
+    if len(branches) == 0:
+        final_fidelity = 0.0
+    elif surviving_mass <= 0.0:
+        final_fidelity = 0.0
+    else:
+        final_fidelity = float(
+            sum(
+                (float(b["weight"]) / surviving_mass) * _branch_final_fidelity(b)
+                for b in branches
+            )
+        )
+
+    counts = None
+    memory = None
+    if return_counts or return_memory:
+        counts, memory = _sample_measurements_from_branch_ensemble(
+            branches, no_qubits, n_samples_final, seed=seed, return_memory=return_memory
+        )
+
+    need_branch_payload = return_branches or return_state or return_bra or return_classical_bits
+    branch_payload = []
+    if need_branch_payload:
+        for branch in branches:
+            probability = float(branch["weight"])
+            conditional_probability = (
+                (probability / surviving_mass) if surviving_mass > 0.0 else 0.0
+            )
+            record = {
+                "probability": probability,
+                "conditional_probability": conditional_probability,
+                "branch_fidelity": _branch_final_fidelity(branch),
+            }
+            if return_classical_bits:
+                record["classical_bits"] = branch["classical_bits"].copy()
+            if return_state:
+                record["state"] = _state_vector_from_bra(branch["bra"], no_qubits)
+            if return_bra:
+                record["bra"] = branch["bra"]
+            branch_payload.append(record)
+
+    outputs = [final_fidelity]
+    if return_pruning_error:
+        outputs.append(pruning_error_bound)
+    if return_branches:
+        outputs.append(branch_payload)
+    else:
+        if return_classical_bits:
+            outputs.append([entry["classical_bits"] for entry in branch_payload])
+        if return_state:
+            outputs.append([entry["state"] for entry in branch_payload])
+        if return_bra:
+            outputs.append([entry["bra"] for entry in branch_payload])
+    if return_counts:
+        outputs.append(counts)
+    if return_memory:
+        outputs.append(memory)
+
+    if len(outputs) == 1:
+        return outputs[0]
+    return tuple(outputs)
+
+
+def DMRG_dynamic_all_branches_from_qasm3(
+    compression_steps,
+    no_sweeps,
+    D,
+    network_structure,
+    qasm_text,
+    network_type,
+    max_branches=None,
+    probability_cutoff=0.0,
+    max_pruning_error=None,
+    return_branches=False,
+    return_state=False,
+    return_bra=False,
+    return_classical_bits=False,
+    return_pruning_error=False,
+    basis_gates=None,
+    apply_transpile=False,
+    optimization_level=0,
+    n_samples_final=None,
+    seed=None,
+    return_counts=False,
+    return_memory=False,
+):
+    """
+    Parses dynamic OpenQASM 3 into CircuitIR and runs all-branches dynamic TTN/MPS simulation.
+    """
+    circuit_ir = qasm3_to_circuit_ir(
+        qasm_text,
+        basis_gates=basis_gates,
+        apply_transpile=apply_transpile,
+        optimization_level=optimization_level,
+        allow_dynamic=True,
+    )
+    return DMRG_dynamic_all_branches_from_circuit_ir(
+        compression_steps=compression_steps,
+        no_sweeps=no_sweeps,
+        D=D,
+        network_structure=network_structure,
+        circuit_ir=circuit_ir,
+        network_type=network_type,
+        max_branches=max_branches,
+        probability_cutoff=probability_cutoff,
+        max_pruning_error=max_pruning_error,
+        return_branches=return_branches,
+        return_state=return_state,
+        return_bra=return_bra,
+        return_classical_bits=return_classical_bits,
+        return_pruning_error=return_pruning_error,
+        n_samples_final=n_samples_final,
+        seed=seed,
+        return_counts=return_counts,
+        return_memory=return_memory,
+    )
 
 
 def DMRG_dynamic_single_path_from_circuit_ir(compression_steps, no_sweeps, D, network_structure, circuit_ir, network_type, seed=None, return_state=False, return_bra=False, return_classical_bits=False, return_branch_probability=False, n_samples_final=None, return_counts=False, return_memory=False):
