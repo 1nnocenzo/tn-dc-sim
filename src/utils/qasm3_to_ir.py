@@ -168,6 +168,10 @@ def _append_qiskit_instructions_to_ir(circuit, instructions, ir, allow_dynamic, 
                 raise ValueError(
                     "Operation 'if_else' is not supported by the non-dynamic IR path."
                 )
+            if inherited_condition is not None:
+                raise ValueError(
+                    "Nested conditionals are not supported by this IR converter."
+                )
             branch_condition = _condition_from_qiskit(op.condition, circuit, clbit_map)
             true_condition = _combine_conditions_and(inherited_condition, branch_condition)
             false_condition = _combine_conditions_and(inherited_condition, _negate_condition(branch_condition))
@@ -215,6 +219,10 @@ def _append_qiskit_instructions_to_ir(circuit, instructions, ir, allow_dynamic, 
                 raise ValueError(
                     "Operation 'measure' is not supported by the non-dynamic IR path."
                 )
+            if inherited_condition is not None:
+                raise ValueError(
+                    "Only unitary gates are supported inside conditional branches."
+                )
             qubits = _extract_qubit_indices(circuit, instruction, qubit_map)
             clbits = _extract_clbit_indices(circuit, instruction, clbit_map)
             if len(qubits) != 1 or len(clbits) != 1:
@@ -226,6 +234,10 @@ def _append_qiskit_instructions_to_ir(circuit, instructions, ir, allow_dynamic, 
             if not allow_dynamic:
                 raise ValueError(
                     "Operation 'reset' is not supported by the non-dynamic IR path."
+                )
+            if inherited_condition is not None:
+                raise ValueError(
+                    "Only unitary gates are supported inside conditional branches."
                 )
             qubits = _extract_qubit_indices(circuit, instruction, qubit_map)
             if len(qubits) != 1:
@@ -529,6 +541,8 @@ def _append_openqasm_statements_to_ir(statements, ir, allow_dynamic, basis_gates
         if stmt_type == "BranchingStatement":
             if not allow_dynamic:
                 raise ValueError("Operation 'if' is not supported by the non-dynamic IR path.")
+            if inherited_condition is not None:
+                raise ValueError("Nested conditionals are not supported by this IR converter.")
 
             branch_condition = _condition_from_openqasm_expr(statement.condition, clbit_ranges)
             true_condition = _combine_conditions_and(inherited_condition, branch_condition)
@@ -558,6 +572,8 @@ def _append_openqasm_statements_to_ir(statements, ir, allow_dynamic, basis_gates
         if stmt_type == "QuantumMeasurementStatement":
             if not allow_dynamic:
                 raise ValueError("Operation 'measure' is not supported by the non-dynamic IR path.")
+            if inherited_condition is not None:
+                raise ValueError("Only unitary gates are supported inside conditional branches.")
             if statement.target is None:
                 raise ValueError("Measure without a classical target is not supported in the dynamic path.")
 
@@ -573,6 +589,8 @@ def _append_openqasm_statements_to_ir(statements, ir, allow_dynamic, basis_gates
         if stmt_type == "QuantumReset":
             if not allow_dynamic:
                 raise ValueError("Operation 'reset' is not supported by the non-dynamic IR path.")
+            if inherited_condition is not None:
+                raise ValueError("Only unitary gates are supported inside conditional branches.")
             qubits = _resolve_ast_qubit_reference(statement.qubits, qubit_ranges)
             for qubit in qubits:
                 ir.add_operation("reset", [qubit], condition=inherited_condition)

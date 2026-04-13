@@ -1050,7 +1050,7 @@ def DMRG_from_circuit_ir(compression_steps, no_sweeps, D, network_structure, cir
     Runs DMRG compression for a generic non-dynamic CircuitIR.
 
     Args:
-        compression_steps (int): Number of chunks to split the circuit into.
+        compression_steps (int): Maximum number of unitary operations per chunk.
         no_sweeps (int): Number of sweeps for each chunk.
         D (list): Bond dimensions for TTN/MPS.
         network_structure (list): TTN hierarchy, ignored for MPS except for validation.
@@ -1068,46 +1068,35 @@ def DMRG_from_circuit_ir(compression_steps, no_sweeps, D, network_structure, cir
         assert n_samples_final is not None and n_samples_final > 0, "n_samples_final must be set when requesting final sampling"
 
     no_qubits = circuit_ir.no_qubits
-    print(f" Total Compression Step = {compression_steps} and network = {network_type} and nodes: {network_structure}" )
+    ket, bra = _initialize_ket_bra(network_type, no_qubits, D, network_structure, bra_initial="zero")
+    _update_ket_with_bra_conjugate(ket, bra)
 
-    Fid = []
-    op_chunks = partition_into_k_parts(circuit_ir.operations, compression_steps)
+    fidelity_terms = []
+    unitary_buffer = []
 
-    ket = None
-    bra = None
-    for step, chunk_ops in enumerate(op_chunks):
-        if step == 0:
-            ket, bra = _initialize_ket_bra(network_type, no_qubits, D, network_structure)
-        else:
-            _update_ket_with_bra_conjugate(ket, bra)
+    def flush_unitary_chunk():
+        nonlocal unitary_buffer
+        if len(unitary_buffer) == 0:
+            return
+        chunk_ir = _build_chunk_ir_from_operations(no_qubits, unitary_buffer)
+        F_ = _apply_ir_chunk_with_dmrg(ket, bra, chunk_ir, no_qubits, no_sweeps, network_type)
+        fidelity_terms.append(F_)
+        _update_ket_with_bra_conjugate(ket, bra)
+        unitary_buffer = []
 
-        chunk_ir = CircuitIR(no_qubits, circuit_ir.no_clbits)
-        for op in chunk_ops:
-            chunk_ir.add_operation(op.name, op.qubits, op.params, op.condition)
+    for op in circuit_ir.operations:
+        assert op.condition is None, "Non-dynamic path does not support classically conditioned operations"
+        assert len(op.clbits) == 0, "Non-dynamic path does not support classical-bit operands in operations"
+        unitary_buffer.append(op)
+        if len(unitary_buffer) >= compression_steps:
+            flush_unitary_chunk()
 
-        circ = circuit_from_ir(bra.rank_all + 1, chunk_ir)
-        print("Number of circuit ops:", len(chunk_ops))
+    flush_unitary_chunk()
 
-        N = full_network_from_edge_list(ket, circ, bra, no_qubits)
-        print("Memory = ", bra.memory_footprint())
-        start_time = time.time()
-        f = sweep(no_sweeps, N, bra, network_type=network_type)
-        F_ = np.max(f[-1, :])
-        Fid.append(F_)
-
-        print(
-            f"Compression step = {step + 1}; Fidelity = {np.cumprod(np.array(Fid))[-1]}; "
-            f"sweep time = {time.time() - start_time}"
-        )
-
-        del circ
-        del N
-        gc.collect()
-
-    if len(Fid) == 0:
+    if len(fidelity_terms) == 0:
         final_fidelity = 1.0
     else:
-        final_fidelity = np.cumprod(np.array(Fid))[-1]
+        final_fidelity = np.cumprod(np.array(fidelity_terms))[-1]
 
     need_state = return_state or return_counts or return_memory
     final_state = None
