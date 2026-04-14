@@ -136,7 +136,8 @@ def supported_single_qubit_gates():
 
 
 def supported_two_qubit_gates():
-    return ["cx", "cz", "swap", "rzz"]
+    return ["cx", "cz", "swap"]
+    #return ["cx", "cz", "swap", "rzz"]
 
 
 def supported_ir_gates():
