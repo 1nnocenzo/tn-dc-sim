@@ -469,19 +469,19 @@ def _condition_from_openqasm_expr(expr, clbit_ranges):
 
     if expr_type == "UnaryExpression":
         op = _ast_operator_symbol(expr.op)
-        if op == "!":
+        if op in {"!", "~"}:
             return _negate_condition(_condition_from_openqasm_expr(expr.expression, clbit_ranges))
         raise ValueError(f"Unsupported unary boolean operator '{op}'.")
 
     if expr_type == "BinaryExpression":
         op = _ast_operator_symbol(expr.op)
 
-        if op in {"&&", "||", "^"}:
+        if op in {"&&", "||", "^", "&", "|"}:
             lhs_condition = _condition_from_openqasm_expr(expr.lhs, clbit_ranges)
             rhs_condition = _condition_from_openqasm_expr(expr.rhs, clbit_ranges)
-            if op == "&&":
+            if op in {"&&", "&"}:
                 return _combine_nary_condition("and", [lhs_condition, rhs_condition])
-            if op == "||":
+            if op in {"||", "|"}:
                 return _combine_nary_condition("or", [lhs_condition, rhs_condition])
             return _combine_nary_condition("xor", [lhs_condition, rhs_condition])
 
@@ -532,7 +532,7 @@ def _append_openqasm_statements_to_ir(statements, ir, allow_dynamic, basis_gates
     for statement in statements:
         stmt_type = statement.__class__.__name__
 
-        if stmt_type in {"Include", "QubitDeclaration", "ClassicalDeclaration"}:
+        if stmt_type in {"Include", "QubitDeclaration", "ClassicalDeclaration", "QuantumGateDefinition"}:
             continue
 
         if stmt_type == "QuantumBarrier":
