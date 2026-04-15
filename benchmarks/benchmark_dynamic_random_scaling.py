@@ -1,0 +1,297 @@
+"""Scaling benchmark for dynamic random circuits.
+
+This script sweeps circuit size, depth, seed, bond dimension, tensor-network
+type, compression steps, and tree structure. It compares the single-path and
+multi-path dynamic simulators on the same family of randomly generated dynamic
+circuits.
+
+Run from the repository root, for example:
+
+    python benchmarks/benchmark_dynamic_random_scaling.py --output results.csv
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import sys
+import time
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+import numpy as np
+from qiskit import qasm3, transpile
+
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from src.simulation import (  # noqa: E402
+    DMRG_dynamic_all_branches_from_qasm3,
+    DMRG_dynamic_single_path_from_qasm3,
+)
+from src.utils.TN_gen import D_mps, D_tree  # noqa: E402
+from src.utils.my_random_circuit import random_circuit  # noqa: E402
+from src.utils.quantum_gates import supported_ir_gates
+
+@dataclass
+class ScalingRow:
+    circuit_seed: int
+    no_qubits: int
+    depth: int
+    network_type: str
+    network_structure: str
+    Dmax: int
+    compression_steps: int
+    no_sweeps: int
+    max_ops_per_branch: int
+    single_path_repeat_count: int
+    single_path_mean_fidelity: float
+    single_path_std_fidelity: float
+    single_path_mean_branch_probability: float
+    single_path_std_branch_probability: float
+    single_path_mean_runtime_s: float
+    multi_path_fidelity: float
+    multi_path_pruning_error: float
+    multi_path_runtime_s: float
+    branch_count: int
+    circuit_size: int
+
+
+def candidate_ttn_structures(no_qubits: int) -> list[list[int]]:
+    structures = [[1, no_qubits]]
+    if no_qubits % 2 == 0 and no_qubits >= 4:
+        structures.append([1, no_qubits // 2, no_qubits])
+    if no_qubits % 4 == 0 and no_qubits >= 8:
+        structures.append([1, no_qubits // 4, no_qubits // 2, no_qubits])
+    return structures[-1:]  # per ora teniamo solo l'ultimo, che è il più bilanciato
+
+
+def build_dynamic_random_qasm(no_qubits: int, depth: int, seed: int, max_ops_per_branch: int) -> str:
+    qc = random_circuit(
+        num_qubits=no_qubits,
+        depth=depth,
+        max_operands=2,
+        conditional=True,
+        reset=True,
+        seed=seed,
+        num_operand_distribution={1: 0.65, 2: 0.35},
+        max_ops_per_branch=max_ops_per_branch,
+    )
+    qc = transpile(qc, optimization_level=0, basis_gates=supported_ir_gates())
+    return qasm3.dumps(qc)
+
+
+def run_single_path(
+    qasm_text: str,
+    D,
+    network_structure: list[int],
+    network_type: str,
+    compression_steps: int,
+    no_sweeps: int,
+    repeat_count: int,
+    base_seed: int,
+) -> tuple[list[float], list[float], list[float]]:
+    fidelities = []
+    branch_probabilities = []
+    runtimes = []
+
+    for repeat in range(repeat_count):
+        run_seed = base_seed * 10_000 + repeat
+        start = time.perf_counter()
+        fidelity, branch_probability = DMRG_dynamic_single_path_from_qasm3(
+            compression_steps=compression_steps,
+            no_sweeps=no_sweeps,
+            D=D,
+            network_structure=network_structure,
+            qasm_text=qasm_text,
+            network_type=network_type,
+            seed=run_seed,
+            return_branch_probability=True,
+        )
+        runtimes.append(time.perf_counter() - start)
+        fidelities.append(float(fidelity))
+        branch_probabilities.append(float(branch_probability))
+
+    return fidelities, branch_probabilities, runtimes
+
+
+def run_multi_path(
+    qasm_text: str,
+    D,
+    network_structure: list[int],
+    network_type: str,
+    compression_steps: int,
+    no_sweeps: int,
+    base_seed: int,
+    max_branches: int | None,
+    probability_cutoff: float,
+) -> tuple[float, float, float, int]:
+    start = time.perf_counter()
+    fidelity, pruning_error, branches = DMRG_dynamic_all_branches_from_qasm3(
+        compression_steps=compression_steps,
+        no_sweeps=no_sweeps,
+        D=D,
+        network_structure=network_structure,
+        qasm_text=qasm_text,
+        network_type=network_type,
+        seed=base_seed,
+        max_branches=max_branches,
+        probability_cutoff=probability_cutoff,
+        return_branches=True,
+        return_pruning_error=True,
+    )
+    runtime = time.perf_counter() - start
+    return float(fidelity), float(pruning_error), float(runtime), len(branches)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run dynamic random circuit scaling benchmarks.")
+    parser.add_argument("--qubits", type=int, nargs="+", default=[5,10], help="Qubit counts to test.")
+    parser.add_argument("--depths", type=int, nargs="+", default=[5,10], help="Circuit depths to test.")
+    parser.add_argument("--seeds", type=int, nargs="+", default=[1,2,3], help="Circuit seeds to test.")
+    parser.add_argument(
+        "--network-types",
+        type=str,
+        nargs="+",
+        default=["tree"],
+        choices=["tree", "mps"],
+        help="Network types to benchmark.",
+    )
+    parser.add_argument("--dmax", type=int, nargs="+", default=[4], help="Bond dimensions to test.")
+    parser.add_argument(
+        "--compression-steps",
+        type=int,
+        nargs="+",
+        default=[40],
+        help="Compression steps to test.",
+    )
+    parser.add_argument("--no-sweeps", type=int, nargs="+", default=[2], help="Sweep counts to test.")
+    parser.add_argument(
+        "--single-path-repeats",
+        type=int,
+        default=5,
+        help="Number of single-path samples per benchmark configuration.",
+    )
+    parser.add_argument(
+        "--max-ops-per-branch",
+        type=int,
+        default=1,
+        help="Maximum operations per randomly generated conditional branch.",
+    )
+    parser.add_argument(
+        "--max-branches",
+        type=int,
+        default=8,
+        help="Optional cap on the number of branches retained by the multi-path simulator.",
+    )
+    parser.add_argument(
+        "--probability-cutoff",
+        type=float,
+        default=0.0,
+        help="Optional probability pruning cutoff for the multi-path simulator.",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("benchmarks/dynamic_random_scaling.csv"),
+        help="CSV output path.",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+
+    rows: list[ScalingRow] = []
+    for no_qubits in args.qubits:
+        ttn_structures = candidate_ttn_structures(no_qubits) # scegliere a priori
+        for depth in args.depths:
+            for seed in args.seeds:
+                qasm_text = build_dynamic_random_qasm(
+                    no_qubits=no_qubits,
+                    depth=depth,
+                    seed=seed,
+                    max_ops_per_branch=args.max_ops_per_branch,
+                )
+                circuit_size = len(qasm_text.splitlines())
+
+                for network_type in args.network_types:
+                    if network_type == "tree":
+                        structures = ttn_structures
+                    else:
+                        structures = [[1, no_qubits]]
+
+                    for structure in structures:
+                        structure_string = json.dumps(structure)
+                        for dmax in args.dmax:
+                            if network_type == "tree":
+                                D = D_tree(structure, dmax)
+                            else:
+                                D = D_mps(no_qubits, dmax)
+
+                            for compression_steps in args.compression_steps:
+                                for no_sweeps in args.no_sweeps:
+                                    single_fidelities, single_branch_probs, single_runtimes = run_single_path(
+                                        qasm_text=qasm_text,
+                                        D=D,
+                                        network_structure=structure,
+                                        network_type=network_type,
+                                        compression_steps=compression_steps,
+                                        no_sweeps=no_sweeps,
+                                        repeat_count=args.single_path_repeats,
+                                        base_seed=seed,
+                                    )
+                                    multi_fidelity, pruning_error, multi_runtime, branch_count = run_multi_path(
+                                        qasm_text=qasm_text,
+                                        D=D,
+                                        network_structure=structure,
+                                        network_type=network_type,
+                                        compression_steps=compression_steps,
+                                        no_sweeps=no_sweeps,
+                                        base_seed=seed,
+                                        max_branches=args.max_branches,
+                                        probability_cutoff=args.probability_cutoff,
+                                    )
+
+                                    row = ScalingRow(
+                                        circuit_seed=seed,
+                                        no_qubits=no_qubits,
+                                        depth=depth,
+                                        network_type=network_type,
+                                        network_structure=structure_string,
+                                        Dmax=dmax,
+                                        compression_steps=compression_steps,
+                                        no_sweeps=no_sweeps,
+                                        max_ops_per_branch=args.max_ops_per_branch,
+                                        single_path_repeat_count=args.single_path_repeats,
+                                        single_path_mean_fidelity=float(np.mean(single_fidelities)),
+                                        single_path_std_fidelity=float(np.std(single_fidelities)),
+                                        single_path_mean_branch_probability=float(np.mean(single_branch_probs)),
+                                        single_path_std_branch_probability=float(np.std(single_branch_probs)),
+                                        single_path_mean_runtime_s=float(np.mean(single_runtimes)),
+                                        multi_path_fidelity=multi_fidelity,
+                                        multi_path_pruning_error=pruning_error,
+                                        multi_path_runtime_s=multi_runtime,
+                                        branch_count=branch_count,
+                                        circuit_size=circuit_size,
+                                    )
+                                    rows.append(row)
+                                    print(json.dumps(asdict(row), sort_keys=True))
+
+    with args.output.open("w", newline="", encoding="utf-8") as file_out:
+        writer = csv.DictWriter(file_out, fieldnames=list(asdict(rows[0]).keys()) if rows else [])
+        if rows:
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(asdict(row))
+
+    print(f"Wrote {len(rows)} rows to {args.output}")
+
+
+if __name__ == "__main__":
+    main()
