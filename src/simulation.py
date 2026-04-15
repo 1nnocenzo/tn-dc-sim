@@ -17,6 +17,8 @@ from src.utils.quantum_gates import (
     ZZ_QAOA
 )
 
+_MEASUREMENT_PROB_EPS = 1e-12
+
 def partition_into_k_parts(lst, k):
     """
     Utility to partition a list into k roughly equal-sized sublists.
@@ -471,6 +473,10 @@ def _measurement_probability_from_tn(ket, bra, no_qubits, target_qubit, outcome)
 def _sample_binary_outcome(p0, rng):
     p0 = min(max(float(p0), 0.0), 1.0)
     p1 = 1.0 - p0
+    if p0 <= _MEASUREMENT_PROB_EPS:
+        p0, p1 = 0.0, 1.0
+    elif p1 <= _MEASUREMENT_PROB_EPS:
+        p0, p1 = 1.0, 0.0
     if p0 <= 0.0:
         return 1, p1
     if p1 <= 0.0:
@@ -676,6 +682,10 @@ def DMRG_dynamic_all_branches_from_circuit_ir(
                 p0 = _measurement_probability_from_tn(branch["ket"], branch["bra"], no_qubits, target_qubit, 0)
                 p0 = min(max(float(p0), 0.0), 1.0)
                 p1 = 1.0 - p0
+                if p0 <= _MEASUREMENT_PROB_EPS:
+                    p0, p1 = 0.0, 1.0
+                elif p1 <= _MEASUREMENT_PROB_EPS:
+                    p0, p1 = 1.0, 0.0
 
                 if p0 > 0.0:
                     ket0 = copy.deepcopy(branch["ket"])
@@ -721,6 +731,10 @@ def DMRG_dynamic_all_branches_from_circuit_ir(
                 p0 = _measurement_probability_from_tn(branch["ket"], branch["bra"], no_qubits, target_qubit, 0)
                 p0 = min(max(float(p0), 0.0), 1.0)
                 p1 = 1.0 - p0
+                if p0 <= _MEASUREMENT_PROB_EPS:
+                    p0, p1 = 0.0, 1.0
+                elif p1 <= _MEASUREMENT_PROB_EPS:
+                    p0, p1 = 1.0, 0.0
 
                 if p0 > 0.0:
                     ket0 = copy.deepcopy(branch["ket"])
