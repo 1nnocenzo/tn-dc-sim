@@ -220,7 +220,7 @@ def sweep(ns,full_network,bra, network_type="tree"):
         np.ndarray: An array containing the fidelity at each step of the sweep.
     """
     partial_fidelity = np.zeros((ns,bra.number_nodes))
-
+    norm_floor = 1e-30
     if network_type == "mps":
         L = _mps_linear_traversal(bra)
         col_index = {node_name: idx for idx, node_name in enumerate(L)}
@@ -229,7 +229,11 @@ def sweep(ns,full_network,bra, network_type="tree"):
             for k, j in enumerate(order):
                 F = full_network.contract_all_but_one(j)
                 f = oe.contract("...,...->", F, np.conjugate(F))
-                A = np.conjugate(F) / np.sqrt(f)
+                f_real = float(np.real(f))
+                if not np.isfinite(f_real):
+                    f_real = norm_floor
+                denom = np.sqrt(max(f_real, norm_floor))
+                A = np.conjugate(F) / denom
                 bra.replace_tensor(j, A)
                 full_network.replace_tensor(j, A)
                 if k != len(order) - 1:
@@ -258,7 +262,11 @@ def sweep(ns,full_network,bra, network_type="tree"):
             j = L[m]
             F = full_network.contract_all_but_one(j)
             f = oe.contract("...,...->", F, np.conjugate(F))
-            A = np.conjugate(F)/np.sqrt(f)
+            f_real = float(np.real(f))
+            if not np.isfinite(f_real):
+                f_real = norm_floor
+            denom = np.sqrt(max(f_real, norm_floor))
+            A = np.conjugate(F) / denom
             bra.replace_tensor(j,A)
             full_network.replace_tensor(j,A)
             if k!=len(L)-1:
