@@ -62,12 +62,15 @@ class ScalingRow:
 
 
 def candidate_ttn_structures(no_qubits: int) -> list[list[int]]:
+    return [[1, no_qubits // 2, no_qubits]]  
+    '''
     structures = [[1, no_qubits]]
     if no_qubits % 2 == 0 and no_qubits >= 4:
         structures.append([1, no_qubits // 2, no_qubits])
     if no_qubits % 4 == 0 and no_qubits >= 8:
         structures.append([1, no_qubits // 4, no_qubits // 2, no_qubits])
     return structures[-1:]  # per ora teniamo solo l'ultimo, che è il più bilanciato
+    '''
 
 
 def build_dynamic_random_qasm(no_qubits: int, depth: int, seed: int, max_ops_per_branch: int) -> str:
@@ -148,32 +151,49 @@ def run_multi_path(
     return float(fidelity), float(pruning_error), float(runtime), len(branches)
 
 
+def count_total_configurations(args: argparse.Namespace) -> int:
+    total = 0
+    for no_qubits in args.qubits:
+        ttn_structures = candidate_ttn_structures(no_qubits)
+        for _depth in args.depths:
+            for _seed in args.seeds:
+                for network_type in args.network_types:
+                    structures = ttn_structures if network_type == "tree" else [[1, no_qubits]]
+                    total += (
+                        len(structures)
+                        * len(args.dmax)
+                        * len(args.compression_steps)
+                        * len(args.no_sweeps)
+                    )
+    return total
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run dynamic random circuit scaling benchmarks.")
-    parser.add_argument("--qubits", type=int, nargs="+", default=[5,10], help="Qubit counts to test.")
-    parser.add_argument("--depths", type=int, nargs="+", default=[5,10], help="Circuit depths to test.")
+    parser.add_argument("--qubits", type=int, nargs="+", default=[6,12], help="Qubit counts to test.")
+    parser.add_argument("--depths", type=int, nargs="+", default=[10,20], help="Circuit depths to test.")
     parser.add_argument("--seeds", type=int, nargs="+", default=[1,2,3], help="Circuit seeds to test.")
     parser.add_argument(
         "--network-types",
         type=str,
         nargs="+",
-        default=["tree"],
+        default=["tree", "mps"],
         choices=["tree", "mps"],
         help="Network types to benchmark.",
     )
-    parser.add_argument("--dmax", type=int, nargs="+", default=[4], help="Bond dimensions to test.")
+    parser.add_argument("--dmax", type=int, nargs="+", default=[2, 4, 8], help="Bond dimensions to test.")
     parser.add_argument(
         "--compression-steps",
         type=int,
         nargs="+",
-        default=[40],
+        default=[4, 20],
         help="Compression steps to test.",
     )
     parser.add_argument("--no-sweeps", type=int, nargs="+", default=[2], help="Sweep counts to test.")
     parser.add_argument(
         "--single-path-repeats",
         type=int,
-        default=5,
+        default=20,
         help="Number of single-path samples per benchmark configuration.",
     )
     parser.add_argument(
@@ -206,8 +226,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    total_configurations = count_total_configurations(args)
 
     rows: list[ScalingRow] = []
+    config_index = 0
     for no_qubits in args.qubits:
         ttn_structures = candidate_ttn_structures(no_qubits) # scegliere a priori
         for depth in args.depths:
@@ -236,6 +258,13 @@ def main() -> None:
 
                             for compression_steps in args.compression_steps:
                                 for no_sweeps in args.no_sweeps:
+                                    config_index += 1
+                                    print(
+                                        f"Configuration {config_index}/{total_configurations}: "
+                                        f"qubits={no_qubits}, depth={depth}, seed={seed}, "
+                                        f"network_type={network_type}, structure={structure_string}, "
+                                        f"Dmax={dmax}, compression_steps={compression_steps}, no_sweeps={no_sweeps}"
+                                    )
                                     single_fidelities, single_branch_probs, single_runtimes = run_single_path(
                                         qasm_text=qasm_text,
                                         D=D,
