@@ -248,7 +248,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--single-path-repeats",
         type=int,
-        default=20,
+        default=10,
         help="Number of single-path samples per benchmark configuration.",
     )
     parser.add_argument(
