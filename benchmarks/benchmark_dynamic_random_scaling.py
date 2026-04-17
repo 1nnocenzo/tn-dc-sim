@@ -115,6 +115,8 @@ def build_dynamic_random_qasm(no_qubits: int, depth: int, seed: int, max_ops_per
             continue
 
         qc = transpile(qc, optimization_level=0, basis_gates=supported_ir_gates())
+        print("Size transpiled circuit: ", qc.size())
+
         qasm_text = qasm3.dumps(qc)
         if _qasm_is_dynamic(qasm_text):
             return qasm_text
@@ -225,8 +227,8 @@ def count_total_configurations(args: argparse.Namespace) -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run dynamic random circuit scaling benchmarks.")
-    parser.add_argument("--qubits", type=int, nargs="+", default=[20], help="Qubit counts to test.")
-    parser.add_argument("--depths", type=int, nargs="+", default=[20], help="Circuit depths to test.")
+    parser.add_argument("--qubits", type=int, nargs="+", default=[12], help="Qubit counts to test.")
+    parser.add_argument("--depths", type=int, nargs="+", default=[12], help="Circuit depths to test.")
     parser.add_argument("--seeds", type=int, nargs="+", default=[1,2,3], help="Circuit seeds to test.")
     parser.add_argument(
         "--network-types",
@@ -236,12 +238,12 @@ def parse_args() -> argparse.Namespace:
         choices=["tree", "mps"],
         help="Network types to benchmark.",
     )
-    parser.add_argument("--dmax", type=int, nargs="+", default=[2, 4, 8], help="Bond dimensions to test.")
+    parser.add_argument("--dmax", type=int, nargs="+", default=[2, 4, 8, 16], help="Bond dimensions to test.")
     parser.add_argument(
         "--compression-steps",
         type=int,
         nargs="+",
-        default=[50],
+        default=[20],
         help="Compression steps to test.",
     )
     parser.add_argument("--no-sweeps", type=int, nargs="+", default=[2], help="Sweep counts to test.")
@@ -260,7 +262,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-branches",
         type=int,
-        default=1,
+        default=8,
         help="Optional cap on the number of branches retained by the multi-path simulator.",
     )
     parser.add_argument(
@@ -316,7 +318,7 @@ def main() -> None:
                                     config_index += 1
                                     print(
                                         f"Configuration {config_index}/{total_configurations}: "
-                                        f"qubits={no_qubits}, depth={depth}, seed={seed}, "
+                                        f"qubits={no_qubits}, depth={depth}, size={circuit_size}, seed={seed}, "
                                         f"network_type={network_type}, structure={structure_string}, "
                                         f"Dmax={dmax}, compression_steps={compression_steps}, no_sweeps={no_sweeps}"
                                     )
