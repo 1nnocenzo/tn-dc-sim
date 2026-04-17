@@ -76,7 +76,9 @@ class ScalingRow:
 
 
 def candidate_ttn_structures(no_qubits: int) -> list[list[int]]:
-    return [[1, no_qubits // 2, no_qubits]]
+    return [[1, 2, 8, no_qubits]] 
+    #return [[1, 3, 9, 27, no_qubits]]
+    #return [[1, no_qubits // 2, no_qubits]]
 
 
 def _qc_is_dynamic(qc) -> bool:
@@ -115,11 +117,12 @@ def build_dynamic_random_qasm(no_qubits: int, depth: int, seed: int, max_ops_per
             continue
 
         qc = transpile(qc, optimization_level=0, basis_gates=supported_ir_gates())
-        print("Size transpiled circuit: ", qc.size())
+        size = qc.size()
+        print("Size transpiled circuit: ",size)
 
         qasm_text = qasm3.dumps(qc)
         if _qasm_is_dynamic(qasm_text):
-            return qasm_text
+            return qasm_text, size
 
     raise RuntimeError(
         "Unable to generate a dynamic random circuit containing conditional logic or reset "
@@ -227,8 +230,8 @@ def count_total_configurations(args: argparse.Namespace) -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run dynamic random circuit scaling benchmarks.")
-    parser.add_argument("--qubits", type=int, nargs="+", default=[12], help="Qubit counts to test.")
-    parser.add_argument("--depths", type=int, nargs="+", default=[12], help="Circuit depths to test.")
+    parser.add_argument("--qubits", type=int, nargs="+", default=[64], help="Qubit counts to test.")
+    parser.add_argument("--depths", type=int, nargs="+", default=[2,3,4,5,6,7,8], help="Circuit depths to test.")
     parser.add_argument("--seeds", type=int, nargs="+", default=[1,2,3], help="Circuit seeds to test.")
     parser.add_argument(
         "--network-types",
@@ -238,19 +241,19 @@ def parse_args() -> argparse.Namespace:
         choices=["tree", "mps"],
         help="Network types to benchmark.",
     )
-    parser.add_argument("--dmax", type=int, nargs="+", default=[2, 4, 8, 16], help="Bond dimensions to test.")
+    parser.add_argument("--dmax", type=int, nargs="+", default=[4,8,16], help="Bond dimensions to test.")
     parser.add_argument(
         "--compression-steps",
         type=int,
         nargs="+",
-        default=[20],
+        default=[10],
         help="Compression steps to test.",
     )
     parser.add_argument("--no-sweeps", type=int, nargs="+", default=[2], help="Sweep counts to test.")
     parser.add_argument(
         "--single-path-repeats",
         type=int,
-        default=10,
+        default=10, 
         help="Number of single-path samples per benchmark configuration.",
     )
     parser.add_argument(
@@ -291,13 +294,13 @@ def main() -> None:
         ttn_structures = candidate_ttn_structures(no_qubits) # scegliere a priori
         for depth in args.depths:
             for seed in args.seeds:
-                qasm_text = build_dynamic_random_qasm(
+                qasm_text, size = build_dynamic_random_qasm(
                     no_qubits=no_qubits,
                     depth=depth,
                     seed=seed,
                     max_ops_per_branch=args.max_ops_per_branch,
                 )
-                circuit_size = len(qasm_text.splitlines())
+                circuit_size = size
 
                 for network_type in args.network_types:
                     if network_type == "tree":
@@ -317,7 +320,7 @@ def main() -> None:
                                 for no_sweeps in args.no_sweeps:
                                     config_index += 1
                                     print(
-                                        f"Configuration {config_index}/{total_configurations}: "
+                                        f"\nConfiguration {config_index}/{total_configurations}: "
                                         f"qubits={no_qubits}, depth={depth}, size={circuit_size}, seed={seed}, "
                                         f"network_type={network_type}, structure={structure_string}, "
                                         f"Dmax={dmax}, compression_steps={compression_steps}, no_sweeps={no_sweeps}"
@@ -403,6 +406,7 @@ def main() -> None:
                                         circuit_size=circuit_size,
                                     )
                                     rows.append(row)
+                                    print("\n")
                                     print(json.dumps(asdict(row), sort_keys=True))
 
     with args.output.open("w", newline="", encoding="utf-8") as file_out:
