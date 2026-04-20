@@ -20,6 +20,7 @@ from src.utils.quantum_gates import (
 _MEASUREMENT_PROB_EPS = 1e-12
 _COMPLEX128_BYTES = np.dtype(np.complex128).itemsize
 _MPS_ZERO_BRA_PERTURB_EPS = 1e-10
+_TREE_ZERO_BRA_PERTURB_EPS = 1e-10
 
 def partition_into_k_parts(lst, k):
     """
@@ -352,18 +353,27 @@ def _sample_measurements_from_state(state, no_qubits, n_samples_final, seed=None
     return counts, None
 
 
-def _apply_mps_bra_symmetry_breaking_perturbation(bra):
-    # A strictly-product bra can trap one-site MPS sweeps in symmetry-protected
-    # fixed points (e.g., GHZ plateau at fidelity 0.5). A tiny deterministic
-    # perturbation breaks that symmetry while remaining numerically negligible.
+def _apply_bra_symmetry_breaking_perturbation(bra, eps):
     for node_name in bra.nodes:
         tensor = bra.nodes[node_name].tensor.astype(complex, copy=True)
         perturb = (np.arange(tensor.size, dtype=float).reshape(tensor.shape) + 1.0)
-        tensor = tensor + _MPS_ZERO_BRA_PERTURB_EPS * (perturb + 1j * perturb)
+        tensor = tensor + eps * (perturb + 1j * perturb)
         norm = float(np.linalg.norm(tensor))
         if norm > 0.0:
             tensor = tensor / norm
         bra.replace_tensor(node_name, tensor)
+
+
+def _apply_mps_bra_symmetry_breaking_perturbation(bra):
+    # A strictly-product bra can trap one-site MPS sweeps in symmetry-protected
+    # fixed points (e.g., GHZ plateau at fidelity 0.5). A tiny deterministic
+    # perturbation breaks that symmetry while remaining numerically negligible.
+    _apply_bra_symmetry_breaking_perturbation(bra, _MPS_ZERO_BRA_PERTURB_EPS)
+
+
+def _apply_tree_bra_symmetry_breaking_perturbation(bra):
+    # Mirrors MPS zero-state perturbation for TTN initialization.
+    _apply_bra_symmetry_breaking_perturbation(bra, _TREE_ZERO_BRA_PERTURB_EPS)
 
 
 def _initialize_ket_bra(network_type, no_qubits, D, network_structure, bra_initial="random"):
@@ -371,6 +381,8 @@ def _initialize_ket_bra(network_type, no_qubits, D, network_structure, bra_initi
         assert no_qubits == network_structure[-1], "Number of qubits mismatch"
         ket = Tree(D, "Ket", 0, "zero", network_structure)
         bra = Tree(D, "Bra", ket.rank_all + 1, bra_initial, network_structure)
+        if bra_initial == "zero":
+            _apply_tree_bra_symmetry_breaking_perturbation(bra)
     elif network_type == "mps":
         assert no_qubits == len(D) + 1, "Number of qubits mismatch"
         ket = MPS(D, "Ket", 0, "zero")
