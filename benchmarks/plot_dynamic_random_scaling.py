@@ -257,6 +257,60 @@ def plot_single_vs_multi_by_dmax(
     plt.close(fig)
 
 
+def plot_single_vs_multi_by_depth(rows: list[dict[str, object]], network_type: str, output_path: Path) -> None:
+    network_rows = [row for row in rows if row["network_type"] == network_type]
+    if not network_rows:
+        raise ValueError(f"No rows found for network_type={network_type!r}")
+
+    grouped: dict[tuple[object, ...], list[dict[str, object]]] = {}
+    for row in network_rows:
+        key = (row["Dmax"], row["depth"])
+        grouped.setdefault(key, []).append(row)
+
+    summary = []
+    for (dmax, depth), group in grouped.items():
+        summary.append(
+            {
+                "Dmax": dmax,
+                "depth": depth,
+                "single_path_mean_fidelity": sum(float(row["single_path_mean_fidelity"]) for row in group) / len(group),
+                "multi_path_fidelity": sum(float(row["multi_path_fidelity"]) for row in group) / len(group),
+            }
+        )
+
+    summary = sorted(summary, key=lambda row: (row["Dmax"], row["depth"]))
+    network_label = "MPS" if network_type == "mps" else "TTN"
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for dmax in sorted({row["Dmax"] for row in summary}):
+        group = [row for row in summary if row["Dmax"] == dmax]
+        group = sorted(group, key=lambda row: row["depth"])
+        ax.plot(
+            [row["depth"] for row in group],
+            [row["single_path_mean_fidelity"] for row in group],
+            marker="o",
+            linewidth=2,
+            linestyle="--",
+            label=f"Dmax={dmax} single",
+        )
+        ax.plot(
+            [row["depth"] for row in group],
+            [row["multi_path_fidelity"] for row in group],
+            marker="s",
+            linewidth=2,
+            label=f"Dmax={dmax} multi",
+        )
+
+    ax.set_xlabel("Circuit depth")
+    ax.set_ylabel("Fidelity")
+    ax.set_title(f"{network_label} fidelity vs circuit depth")
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=7, ncol=2)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=200)
+    plt.close(fig)
+
+
 def plot_branch_count(rows: list[dict[str, object]], output_path: Path) -> None:
     summary = _mean_by_key(rows, ("network_type", "Dmax", "no_qubits"), "branch_count")
 
@@ -333,6 +387,8 @@ def main() -> None:
         "Fidelity",
         args.output_dir / "fidelity_vs_dmax.png",
     )
+    plot_single_vs_multi_by_depth(rows, "mps", args.output_dir / "mps_fidelity_vs_depth.png")
+    plot_single_vs_multi_by_depth(rows, "tree", args.output_dir / "ttn_fidelity_vs_depth.png")
     plot_single_vs_multi_by_dmax(
         rows,
         "single_path_mean_peak_bytes_estimate",
