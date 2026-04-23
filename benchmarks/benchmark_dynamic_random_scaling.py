@@ -384,7 +384,7 @@ def parse_args() -> argparse.Namespace:
         "--network-types",
         type=str,
         nargs="+",
-        default=["mps"],
+        default=["tree"],
         choices=["tree", "mps"],
         help="Network types to benchmark.",
     )
@@ -467,7 +467,7 @@ def main() -> None:
         ttn_structures = candidate_ttn_structures(no_qubits) # scegliere a priori
         for depth in args.depths:
             for i, seed in enumerate(args.seeds):
-                seeds = [x * depth for x in seeds]
+                seeds = [x * depth for x in args.seeds]
                 qasm_text, trial_seed, size = build_dynamic_random_qasm(
                     no_qubits=no_qubits,
                     depth=depth,
