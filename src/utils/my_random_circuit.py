@@ -339,7 +339,7 @@ def random_circuit(
         # faster, since in Python we don't have a compiler to do this for us.
         if conditional and layer_number != 0:
             # Conditional insertion is sampled per layer
-            add_conditional_layer = bool(rng.random() < 0.1)
+            add_conditional_layer = bool(rng.random() < 0.15)
             conditional_insert_at = (
                 int(rng.integers(0, len(gate_specs)))
                 if add_conditional_layer and len(gate_specs) > 0

@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import sys
 import time
 from dataclasses import asdict, dataclass
@@ -98,22 +99,40 @@ def _qasm_is_dynamic(qasm_text: str) -> bool:
     return ("if (" in qasm_text) or ("reset " in qasm_text)
 
 
+def _qc_has_conditional(qc) -> bool:
+    for instruction in qc.data:
+        op = instruction.operation
+        op_name = getattr(op, "name", "")
+        if op_name in {"if_else", "if_test"}:
+            return True
+        if getattr(op, "condition", None) is not None:
+            return True
+    return False
+
+
+def _qasm_has_conditional(qasm_text: str) -> bool:
+    return len(re.findall(r"\bif\s*\(", qasm_text)) > 0
+
+
 def build_dynamic_random_qasm(no_qubits: int, depth: int, seed: int, max_ops_per_branch: int) -> str:
-    max_attempts = 200
+    
+    max_attempts = 10000
     for attempt in range(max_attempts):
         trial_seed = seed + attempt
+
         qc = random_circuit(
             num_qubits=no_qubits,
             depth=depth,
             max_operands=2,
             conditional=True,
-            reset=True,
+            reset=False,
             seed=trial_seed,
             num_operand_distribution={1: 0.65, 2: 0.35},
             max_ops_per_branch=max_ops_per_branch,
         )
 
-        if not _qc_is_dynamic(qc):
+        # Force circuits to include at least one conditional operation.
+        if not _qc_has_conditional(qc):
             continue
 
         qc = transpile(qc, optimization_level=0, basis_gates=supported_ir_gates())
@@ -121,13 +140,141 @@ def build_dynamic_random_qasm(no_qubits: int, depth: int, seed: int, max_ops_per
         print("Size transpiled circuit: ",size)
 
         qasm_text = qasm3.dumps(qc)
-        if _qasm_is_dynamic(qasm_text):
-            return qasm_text, size
+        if _qasm_has_conditional(qasm_text):
+            return qasm_text, trial_seed, size
+    
+        
+    
 
     raise RuntimeError(
-        "Unable to generate a dynamic random circuit containing conditional logic or reset "
+        "Unable to generate a random circuit containing at least one conditional operation "
         f"after {max_attempts} attempts."
     )
+
+
+def _count_circuit_characteristics(qasm_text: str, max_branches: int | None = None) -> tuple[int, int, int]:
+    """Count dynamic operations, conditional operations, and branch estimate from QASM.
+
+    Returned values are:
+        - dynamic operations: measurements + resets
+        - conditional operations: number of operations inside ``if (...) { ... }`` blocks
+        - branches: estimated from measurement and reset events that introduce branching
+    """
+    num_measure_ops = 0
+    num_reset_ops = 0
+    num_conditional_ops = 0
+    num_branch_events = 0
+    conditional_branch_events = 0
+
+    # Parse if-blocks line by line to handle complex conditions, e.g.:
+    # if (c[5] & c[6] ^ ~c[12]) {
+    #   z q[15];
+    # }
+    in_if_block = False
+    if_block_depth = 0
+    current_if_ops = 0
+
+    for raw_line in qasm_text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("//"):
+            continue
+
+        if in_if_block:
+            open_braces = line.count("{")
+            close_braces = line.count("}")
+
+            # Count executable statements inside the current if-block.
+            if line not in {"{", "}"} and line.endswith(";") and not line.startswith("if"):
+                current_if_ops += 1
+
+            if_block_depth += open_braces - close_braces
+            if if_block_depth <= 0:
+                conditional_branch_events += current_if_ops
+                in_if_block = False
+                current_if_ops = 0
+            continue
+
+        if re.match(r"^if\s*\(.*\)\s*\{\s*$", line):
+            in_if_block = True
+            if_block_depth = 1
+            current_if_ops = 0
+            continue
+
+        if "measure" in line:
+            num_measure_ops += 1
+            num_branch_events += 1
+            continue
+
+        if line.startswith("reset "):
+            num_reset_ops += 1
+            num_branch_events += 1
+            continue
+
+    num_conditional_ops = conditional_branch_events
+    num_branch_events += conditional_branch_events
+    num_branches = 2 ** num_branch_events if num_branch_events > 0 else 1
+    if max_branches is not None:
+        num_branches = min(num_branches, max_branches)
+
+    return num_measure_ops, num_reset_ops, num_conditional_ops, num_branches
+
+
+def characterize_random_circuits(
+    no_qubits: int,
+    depth: int,
+    seeds: list[int],
+    max_ops_per_branch: int,
+    max_branches: int | None = None,
+) -> dict[str, float]:
+    """Generate random circuits and characterize them over multiple seeds.
+    
+    Args:
+        no_qubits: Number of qubits
+        depth: Circuit depth
+        seeds: List of seeds to use for circuit generation
+        max_ops_per_branch: Maximum operations per conditional branch
+    
+    Returns:
+        Dictionary with keys:
+            - dynamic_ops_mean, dynamic_ops_std
+            - conditional_ops_mean, conditional_ops_std
+            - branches_mean, branches_std
+    """
+    measurement_ops_list = []
+    reset_ops_list = []
+    conditional_ops_list = []
+    branches_list = []
+    
+    seeds = [x * depth for x in seeds]  # Space out seeds by depth to get more variability in circuit structure
+    for i, seed in enumerate(seeds):
+        qasm_text, trial_seed, _ = build_dynamic_random_qasm(
+            no_qubits=no_qubits,
+            depth=depth,
+            seed=seed,
+            max_ops_per_branch=max_ops_per_branch,
+        )
+        if i < len(seeds) - 1:
+            seeds[i + 1] = trial_seed + 1
+        measurement_ops, reset_ops, conditional_ops, branches = _count_circuit_characteristics(
+            qasm_text=qasm_text,
+            max_branches=max_branches,
+        )
+
+        measurement_ops_list.append(measurement_ops)
+        reset_ops_list.append(reset_ops)
+        conditional_ops_list.append(conditional_ops)
+        branches_list.append(branches)
+    
+    return {
+        "measurement_ops_mean": float(np.mean(measurement_ops_list)) if measurement_ops_list else 0.0,
+        "measurement_ops_std": float(np.std(measurement_ops_list)) if measurement_ops_list else 0.0,
+        "reset_ops_mean": float(np.mean(reset_ops_list)) if reset_ops_list else 0.0,
+        "reset_ops_std": float(np.std(reset_ops_list)) if reset_ops_list else 0.0,
+        "conditional_ops_mean": float(np.mean(conditional_ops_list)) if conditional_ops_list else 0.0,
+        "conditional_ops_std": float(np.std(conditional_ops_list)) if conditional_ops_list else 0.0,
+        "branches_mean": float(np.mean(branches_list)) if branches_list else 0.0,
+        "branches_std": float(np.std(branches_list)) if branches_list else 0.0,
+    }
 
 
 def run_single_path(
@@ -280,11 +427,37 @@ def parse_args() -> argparse.Namespace:
         default=Path("benchmarks/dynamic_random_scaling.csv"),
         help="CSV output path.",
     )
+    parser.add_argument(
+        "--characterize",
+        action="store_true",
+        help="Characterize random circuits (dynamic ops, conditional ops, branches) without running simulator.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    
+    # Handle characterization mode
+    if args.characterize:
+        print("\n=== Circuit Characterization Mode ===\n")
+        for no_qubits in args.qubits:
+            for depth in args.depths:
+                print(f"\nCharacterizing circuits: qubits={no_qubits}, depth={depth}, seeds={args.seeds}")
+                result = characterize_random_circuits(
+                    no_qubits=no_qubits,
+                    depth=depth,
+                    seeds=args.seeds,
+                    max_ops_per_branch=args.max_ops_per_branch,
+                    max_branches=args.max_branches,
+                )
+                #print(f"  Dynamic operations:    mean={result['dynamic_ops_mean']:.2f}, std={result['dynamic_ops_std']:.2f}")
+                print(f"  Measurement ops:       mean={result['measurement_ops_mean']:.2f}, std={result['measurement_ops_std']:.2f}")
+                print(f"  Reset ops:             mean={result['reset_ops_mean']:.2f}, std={result['reset_ops_std']:.2f}")
+                print(f"  Conditional operations: mean={result['conditional_ops_mean']:.2f}, std={result['conditional_ops_std']:.2f}")
+                print(f"  Branches:              mean={result['branches_mean']:.2f}, std={result['branches_std']:.2f}")
+        return
+    
     args.output.parent.mkdir(parents=True, exist_ok=True)
     total_configurations = count_total_configurations(args)
 
@@ -293,13 +466,16 @@ def main() -> None:
     for no_qubits in args.qubits:
         ttn_structures = candidate_ttn_structures(no_qubits) # scegliere a priori
         for depth in args.depths:
-            for seed in args.seeds:
-                qasm_text, size = build_dynamic_random_qasm(
+            for i, seed in enumerate(args.seeds):
+                seeds = [x * depth for x in seeds]
+                qasm_text, trial_seed, size = build_dynamic_random_qasm(
                     no_qubits=no_qubits,
                     depth=depth,
                     seed=seed,
                     max_ops_per_branch=args.max_ops_per_branch,
                 )
+                if i < len(seeds) - 1:
+                    seeds[i + 1] = trial_seed + 1
                 circuit_size = size
 
                 for network_type in args.network_types:
