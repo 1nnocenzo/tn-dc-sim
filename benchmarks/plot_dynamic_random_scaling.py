@@ -120,11 +120,12 @@ def plot_metric_by_qubits(rows: list[dict[str, object]], metric: str, ylabel: st
             label = f"{network_type}, Dmax={dmax}"
             ax.plot([row["no_qubits"] for row in group], [row[metric] for row in group], marker="o", linewidth=2, label=label)
 
-    ax.set_xlabel("Number of qubits")
-    ax.set_ylabel(ylabel)
-    ax.set_title(f"{ylabel} vs qubits")
+    ax.set_xlabel("Number of qubits", fontsize=18)
+    ax.set_ylabel(ylabel, fontsize=18)
+    ax.set_title(f"{ylabel} vs qubits", fontsize=18)
+    ax.tick_params(axis='both', which='major', labelsize=18)
     ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=8)
+    ax.legend(fontsize=27)
     fig.tight_layout()
     fig.savefig(output_path, dpi=200)
     plt.close(fig)
@@ -147,11 +148,12 @@ def plot_metric_by_compression(rows: list[dict[str, object]], metric: str, ylabe
                 label=label,
             )
 
-    ax.set_xlabel("Compression steps")
-    ax.set_ylabel(ylabel)
-    ax.set_title(f"{ylabel} vs compression steps")
+    ax.set_xlabel("Compression steps", fontsize=18)
+    ax.set_ylabel(ylabel, fontsize=18)
+    ax.set_title(f"{ylabel} vs compression steps", fontsize=18)
+    ax.tick_params(axis='both', which='major', labelsize=18)
     ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=8)
+    ax.legend(fontsize=27)
     fig.tight_layout()
     fig.savefig(output_path, dpi=200)
     plt.close(fig)
@@ -173,13 +175,14 @@ def plot_metric_by_dmax(rows: list[dict[str, object]], metric: str, ylabel: str,
             label=label,
         )
 
-    ax.set_xlabel("Dmax")
-    ax.set_ylabel(ylabel)
-    ax.set_title(f"{ylabel} vs Dmax")
+    ax.set_xlabel("Dmax", fontsize=18)
+    ax.set_ylabel(ylabel, fontsize=18)
+    ax.set_title(f"{ylabel} vs Dmax", fontsize=18)
+    ax.tick_params(axis='both', which='major', labelsize=18)
     if use_log_scale:
         ax.set_yscale("log")
     ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=8)
+    ax.legend(fontsize=27, ncol=2)
     fig.tight_layout()
     fig.savefig(output_path, dpi=200)
     plt.close(fig)
@@ -245,13 +248,14 @@ def plot_single_vs_multi_by_dmax(
             label=f"{label_prefix} multibranch",
         )
 
-    ax.set_xlabel("Dmax")
-    ax.set_ylabel(ylabel)
-    ax.set_title(f"{ylabel} vs Dmax")
+    ax.set_xlabel("Dmax", fontsize=18)
+    ax.set_ylabel(ylabel, fontsize=18)
+    ax.set_title(f"{ylabel} vs Dmax", fontsize=18)
+    ax.tick_params(axis='both', which='major', labelsize=18)
     if use_log_scale:
         ax.set_yscale("log")
     ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=8, ncol=2)
+    ax.legend(fontsize=27, ncol=2)
     fig.tight_layout()
     fig.savefig(output_path, dpi=200)
     plt.close(fig)
@@ -281,7 +285,7 @@ def plot_single_vs_multi_by_depth(rows: list[dict[str, object]], network_type: s
     summary = sorted(summary, key=lambda row: (row["Dmax"], row["depth"]))
     network_label = "MPS" if network_type == "mps" else "TTN"
 
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = plt.subplots(figsize=(12, 6))
     for dmax in sorted({row["Dmax"] for row in summary}):
         group = [row for row in summary if row["Dmax"] == dmax]
         group = sorted(group, key=lambda row: row["depth"])
@@ -301,13 +305,14 @@ def plot_single_vs_multi_by_depth(rows: list[dict[str, object]], network_type: s
             label=f"Dmax={dmax} multi",
         )
 
-    ax.set_xlabel("Circuit depth")
-    ax.set_ylabel("Fidelity")
-    ax.set_title(f"{network_label} fidelity vs circuit depth")
+    ax.set_xlabel("Circuit depth", fontsize=18)
+    ax.set_ylabel("Fidelity", fontsize=18)
+    #ax.set_title(f"{network_label} fidelity vs circuit depth")
+    ax.tick_params(axis='both', which='major', labelsize=18)
     ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=7, ncol=2)
+    ax.legend(fontsize=20, ncol=3, loc="lower center", bbox_to_anchor=(0.5, 1.02))
     fig.tight_layout()
-    fig.savefig(output_path, dpi=200)
+    fig.savefig(output_path, dpi=300)
     plt.close(fig)
 
 
@@ -322,11 +327,12 @@ def plot_branch_count(rows: list[dict[str, object]], output_path: Path) -> None:
             label = f"{network_type}, Dmax={dmax}"
             ax.plot([row["no_qubits"] for row in group], [row["branch_count"] for row in group], marker="o", linewidth=2, label=label)
 
-    ax.set_xlabel("Number of qubits")
-    ax.set_ylabel("Average branch count")
-    ax.set_title("Branch count vs qubits")
+    ax.set_xlabel("Number of qubits", fontsize=18)
+    ax.set_ylabel("Average branch count", fontsize=18)
+    ax.set_title("Branch count vs qubits", fontsize=18)
+    ax.tick_params(axis='both', which='major', labelsize=18)
     ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=8)
+    ax.legend(fontsize=27)
     fig.tight_layout()
     fig.savefig(output_path, dpi=200)
     plt.close(fig)
@@ -362,12 +368,13 @@ def plot_single_vs_multi_runtime(rows: list[dict[str, object]], output_path: Pat
             ax.plot([row["no_qubits"] for row in group], [row["single_path_mean_runtime_s"] for row in group], marker="o", linewidth=2, linestyle="--", label=label_single)
             ax.plot([row["no_qubits"] for row in group], [row["multi_path_runtime_s"] for row in group], marker="s", linewidth=2, label=label_multi)
 
-    ax.set_xlabel("Number of qubits")
-    ax.set_ylabel("Runtime [s]")
-    ax.set_title("Single-path vs multi-path runtime")
+    ax.set_xlabel("Number of qubits", fontsize=18)
+    ax.set_ylabel("Runtime [s]", fontsize=18)
+    ax.set_title("Single-path vs multi-path runtime", fontsize=18)
+    ax.tick_params(axis='both', which='major', labelsize=18)
     ax.set_yscale("log")
     ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=7, ncol=2)
+    ax.legend(fontsize=27, ncol=2)
     fig.tight_layout()
     fig.savefig(output_path, dpi=200)
     plt.close(fig)
@@ -377,7 +384,7 @@ def main() -> None:
     args = parse_args()
     _prepare_output_dir(args.output_dir)
     rows = load_results(args.input)
-
+    '''
     plot_metric_by_qubits(rows, "multi_path_fidelity", "Multi-path fidelity", args.output_dir / "multi_path_fidelity_vs_qubits.png")
     plot_metric_by_qubits(rows, "single_path_mean_fidelity", "Single-path mean fidelity", args.output_dir / "single_path_fidelity_vs_qubits.png")
     plot_single_vs_multi_by_dmax(
@@ -387,8 +394,10 @@ def main() -> None:
         "Fidelity",
         args.output_dir / "fidelity_vs_dmax.png",
     )
+    '''
     plot_single_vs_multi_by_depth(rows, "mps", args.output_dir / "mps_fidelity_vs_depth.png")
     plot_single_vs_multi_by_depth(rows, "tree", args.output_dir / "ttn_fidelity_vs_depth.png")
+    '''
     plot_single_vs_multi_by_dmax(
         rows,
         "single_path_mean_peak_bytes_estimate",
@@ -410,7 +419,7 @@ def main() -> None:
     plot_metric_by_compression(rows, "single_path_mean_fidelity", "Single-path mean fidelity", args.output_dir / "single_path_fidelity_vs_compression.png")
     plot_branch_count(rows, args.output_dir / "branch_count_vs_qubits.png")
     plot_single_vs_multi_runtime(rows, args.output_dir / "runtime_single_vs_multi.png")
-
+    '''
     print(f"Saved plots to {args.output_dir}")
 
 

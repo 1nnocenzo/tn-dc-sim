@@ -76,8 +76,8 @@ class ScalingRow:
 
 
 def candidate_ttn_structures(no_qubits: int) -> list[list[int]]:
-    return [[1, 2, 8, 16, no_qubits]] 
-    #return [[1, 3, 9, 27, no_qubits]]
+    #return [[1, 16, no_qubits]] 
+    return [[1, 3, 9, no_qubits]]
     #return [[1, no_qubits // 2, no_qubits]]
 
 
@@ -230,14 +230,14 @@ def count_total_configurations(args: argparse.Namespace) -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run dynamic random circuit scaling benchmarks.")
-    parser.add_argument("--qubits", type=int, nargs="+", default=[32], help="Qubit counts to test.")
+    parser.add_argument("--qubits", type=int, nargs="+", default=[27], help="Qubit counts to test.")
     parser.add_argument("--depths", type=int, nargs="+", default=[2,3,4,5,6,7,8], help="Circuit depths to test.")
     parser.add_argument("--seeds", type=int, nargs="+", default=[1,2,3], help="Circuit seeds to test.")
     parser.add_argument(
         "--network-types",
         type=str,
         nargs="+",
-        default=["tree"],
+        default=["mps"],
         choices=["tree", "mps"],
         help="Network types to benchmark.",
     )
@@ -246,7 +246,7 @@ def parse_args() -> argparse.Namespace:
         "--compression-steps",
         type=int,
         nargs="+",
-        default=[10],
+        default=[20],
         help="Compression steps to test.",
     )
     parser.add_argument("--no-sweeps", type=int, nargs="+", default=[2], help="Sweep counts to test.")
