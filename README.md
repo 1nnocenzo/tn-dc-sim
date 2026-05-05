@@ -1,4 +1,4 @@
-# Quantum Ciruit Simulation with Tree Tensor Network and MPS using Density-Matrix Renormalization Group Algorithm 
+# Dynamic Ciruit Simulation with Tensor Networks using DMRG
 
 This repository implements simulations of **dynamic circuits** with **Tree Tensor Networks (TTNs)** and **Matrix Product States (MPS)** using the **Density Matrix Renormalization Group (DMRG)** algorithm. 
 
