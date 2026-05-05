@@ -1,8 +1,11 @@
 # Quantum Ciruit Simulation with Tree Tensor Network and MPS using Density-Matrix Renormalization Group Algorithm 
 
-This repository implements simulations of **quantum circuits** with **Tree Tensor Networks (TTNs)** and **Matrix Product States (MPS)** using the **Density Matrix Renormalization Group (DMRG)** algorithm. 
+This repository implements simulations of **dynamic circuits** with **Tree Tensor Networks (TTNs)** and **Matrix Product States (MPS)** using the **Density Matrix Renormalization Group (DMRG)** algorithm. 
 
-The code was utilized to obtain the results in the work: “Simulating Quantum Circuits with Tree Tensor Networks using Density-Matrix Renormalization Group Algorithm” ([arXiv:2504.16718](https://arxiv.org/abs/2504.16718)). 
+## Reference
+
+Aditya Dubey, Zeki Zeybek, and Peter Schmelcher, “Simulating Quantum Circuits with Tree Tensor Networks using Density-Matrix Renormalization Group Algorithm,” [arXiv:2504.16718](https://arxiv.org/abs/2504.16718) (2025).
+
 
 ## Installation
 Install all the required dependencies with `pip install -r requirements.txt`.
@@ -26,20 +29,13 @@ Install all the required dependencies with `pip install -r requirements.txt`.
 | `runs`               | Number of independent simulations to average over |
 
 ## Main Input Mode
-
-`main.py` now supports two execution paths:
-
-- `input_mode = "legacy"`: uses the original `random` / `qaoa` pipeline.
-- `input_mode = "qasm3"`: parses OpenQASM 3 into `CircuitIR` and runs the generic non-dynamic DMRG path.
-
-In `qasm3` mode:
 - set `qasm_source_mode` to `"inline"` or `"file"`,
 - set `qasm_text` or `qasm_file_path`,
 - optionally tune `qasm_apply_transpile` and `qasm_optimization_level`.
 
 ## CircuitIR and QASM3 Conversion
 
-The project now includes a minimal internal circuit representation (`CircuitIR`) and a converter from OpenQASM 3:
+The project includes a minimal internal circuit representation (`CircuitIR`) and a converter from OpenQASM 3:
 
 - `src/circuit_ir.py`
 - `src/utils/qasm3_to_ir.py`
@@ -67,11 +63,6 @@ ir = qasm3_to_circuit_ir(
 print(ir)
 print(ir.operations)
 ```
-
-Current converter scope:
-- Supports only non-dynamic circuits
-- Supports 1- and 2-qubit gates
-- Rejects operations using classical bits (`measure`, `reset`, control flow, etc.)
 
 To run the DMRG simulation path directly from OpenQASM 3:
 
@@ -130,8 +121,3 @@ It includes:
 - QASM3 -> CircuitIR conversion check
 - TTN/MPS DMRG runs on a small non-dynamic circuit
 - expected failure test on a dynamic instruction (`measure`)
-
-
-## Reference
-
-Aditya Dubey, Zeki Zeybek, and Peter Schmelcher, “Simulating Quantum Circuits with Tree Tensor Networks using Density-Matrix Renormalization Group Algorithm,” [arXiv:2504.16718](https://arxiv.org/abs/2504.16718) (2025).

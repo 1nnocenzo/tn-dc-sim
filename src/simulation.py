@@ -365,9 +365,6 @@ def _apply_bra_symmetry_breaking_perturbation(bra, eps):
 
 
 def _apply_mps_bra_symmetry_breaking_perturbation(bra):
-    # A strictly-product bra can trap one-site MPS sweeps in symmetry-protected
-    # fixed points (e.g., GHZ plateau at fidelity 0.5). A tiny deterministic
-    # perturbation breaks that symmetry while remaining numerically negligible.
     _apply_bra_symmetry_breaking_perturbation(bra, _MPS_ZERO_BRA_PERTURB_EPS)
 
 
@@ -467,8 +464,6 @@ def _build_chunk_ir_from_operations(no_qubits, operations):
 
 
 def _apply_ir_chunk_with_dmrg(ket, bra, chunk_ir, no_qubits, no_sweeps, network_type):
-    if network_type == "mps":
-        _apply_mps_bra_symmetry_breaking_perturbation(bra)
     circ = circuit_from_ir(bra.rank_all + 1, chunk_ir)
     N = full_network_from_edge_list(ket, circ, bra, no_qubits)
     f = sweep(no_sweeps, N, bra, network_type=network_type)
