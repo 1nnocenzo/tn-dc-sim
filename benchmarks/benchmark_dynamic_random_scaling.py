@@ -384,11 +384,11 @@ def parse_args() -> argparse.Namespace:
         "--network-types",
         type=str,
         nargs="+",
-        default=["tree"],
+        default=["tree", "mps"],
         choices=["tree", "mps"],
         help="Network types to benchmark.",
     )
-    parser.add_argument("--dmax", type=int, nargs="+", default=[4,8,16], help="Bond dimensions to test.")
+    parser.add_argument("--dmax", type=int, nargs="+", default=[8,16,32], help="Bond dimensions to test.")
     parser.add_argument(
         "--compression-steps",
         type=int,
@@ -406,7 +406,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-ops-per-branch",
         type=int,
-        default=1,
+        default=5,
         help="Maximum operations per randomly generated conditional branch.",
     )
     parser.add_argument(
