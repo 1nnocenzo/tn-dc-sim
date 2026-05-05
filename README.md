@@ -2,9 +2,10 @@
 
 This repository implements simulations of **dynamic circuits** with **Tree Tensor Networks (TTNs)** and **Matrix Product States (MPS)** using the **Density Matrix Renormalization Group (DMRG)** algorithm. 
 
+
 ## Reference
 
-Aditya Dubey, Zeki Zeybek, and Peter Schmelcher, “Simulating Quantum Circuits with Tree Tensor Networks using Density-Matrix Renormalization Group Algorithm,” [arXiv:2504.16718](https://arxiv.org/abs/2504.16718) (2025).
+This repository started as a modified version of [AdityaD16/Quantum-Circuit-Simulator-DMRG](https://github.com/AdityaD16/Quantum-Circuit-Simulator-DMRG).
 
 
 ## Installation
