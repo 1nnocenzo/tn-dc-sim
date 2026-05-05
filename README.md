@@ -11,7 +11,7 @@ This repository started as a modified version of [AdityaD16/Quantum-Circuit-Simu
 ## Installation
 Install all the required dependencies with `pip install -r requirements.txt`.
 
-## Simulation Parameters
+<!-- ## Simulation Parameters
 
  `main.py` simulates the circuit using TTN or MPS and outputs fidelity results for each bond dimension. The simulation is configured via parameters in `main.py`. Below is a description of each parameter:
 
@@ -27,7 +27,7 @@ Install all the required dependencies with `pip install -r requirements.txt`.
 | `compression_steps`  | Number of compression steps per circuit depth |
 | `no_sweeps`          | Number of DMRG sweeps|
 | `Dmax`               | List of max bond dimensions to use in the tensor network |
-| `runs`               | Number of independent simulations to average over |
+| `runs`               | Number of independent simulations to average over | -->
 
 ## Main Input Mode
 - set `qasm_source_mode` to `"inline"` or `"file"`,
