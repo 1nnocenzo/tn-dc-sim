@@ -22,19 +22,19 @@ def D_mps(no_qubits,D_max): # Returns the bond dimension list for MPS
         Dmps = Dmps_ + Dmps_[::-1]
     return Dmps
 
-def Tree(D,node_name,TR,initial,no_nodes):
+def Tree(bond_dims,node_name,TR,initial,no_nodes):
     N = Network()
     N.rank_all = TR
-    N.Layers = len(D)
+    N.Layers = len(bond_dims)
     assert node_name == "Ket" or node_name == "Bra", "Wrong Name"
     if initial == "zero":
-        for i in range(len(D)):
+        for i in range(len(bond_dims)):
             for j in range(no_nodes[i]):
                 if i==0:
                     rank = no_nodes[i+1]
-                    tensor = np.zeros(([D[-1-i]]*rank))
+                    tensor = np.zeros(([bond_dims[-1-i]]*rank))
                     tensor.flat[0] = 1
-                    A = Node(node_name+f"{i}{j}",rank,[D[-1-i]]*rank,tensor)
+                    A = Node(node_name+f"{i}{j}",rank,[bond_dims[-1-i]]*rank,tensor)
                     N.add_node(A)
                 else:
 
@@ -46,7 +46,7 @@ def Tree(D,node_name,TR,initial,no_nodes):
                         idx = j 
                     else:
                         idx = j+1 - (no_nodes[i]//no_nodes[i-1])*pj
-                    dimensions = [D[-i]] + [D[-i-1]]*(rank-1)
+                    dimensions = [bond_dims[-i]] + [bond_dims[-i-1]]*(rank-1)
                     tensor = np.zeros((dimensions))
                     tensor.flat[0] = 1
                     A = Node(node_name+f"{i}{j}",rank,dimensions,tensor)
@@ -56,12 +56,12 @@ def Tree(D,node_name,TR,initial,no_nodes):
                     N.add_to_node(node_name+f"{pi}{pj}",node_name+f"{i}{j}",idx,0)
                     
     if initial == "random":
-        for i in range(len(D)):
+        for i in range(len(bond_dims)):
             for j in range(no_nodes[i]):
                 if i==0:
                     rank = no_nodes[i+1]
-                    dimensions = D[-i-1]**rank
-                    A = Node(node_name+f"{i}{j}",rank,[D[-1-i]]*rank,(np.random.randn(dimensions) + 1j * np.random.randn(dimensions)).reshape([D[-i-1]]*rank))
+                    dimensions = bond_dims[-i-1]**rank
+                    A = Node(node_name+f"{i}{j}",rank,[bond_dims[-1-i]]*rank,(np.random.randn(dimensions) + 1j * np.random.randn(dimensions)).reshape([bond_dims[-i-1]]*rank))
                     N.add_node(A)
                 else:
                     rank = no_nodes[i+1]//no_nodes[i] + 1
@@ -71,58 +71,58 @@ def Tree(D,node_name,TR,initial,no_nodes):
                         idx = j 
                     else:
                         idx = j +1 - (no_nodes[i]//no_nodes[i-1])*pj
-                    dimensions = [D[-i]] + [D[-i-1]]*(rank-1)
-                    tensor = random_isometry(D[-i],D[-i-1]**(rank-1))
-                    # print(D[-i-1]*D[-i-1])
+                    dimensions = [bond_dims[-i]] + [bond_dims[-i-1]]*(rank-1)
+                    tensor = random_isometry(bond_dims[-i],bond_dims[-i-1]**(rank-1))
+                    # print(bond_dims[-i-1]*bond_dims[-i-1])
                     A = Node(node_name+f"{i}{j}",rank,dimensions,tensor.reshape(dimensions))
                     N.add_node(A)
                     N.add_to_node(node_name+f"{pi}{pj}",node_name+f"{i}{j}",idx,0)
     return N
 
-def MPS(D,node_name,TR,initial):
+def MPS(bond_dims,node_name,TR,initial):
 
     N = Network()
     N.rank_all = TR
     N.Layers = 1
     assert node_name == "Ket" or node_name == "Bra", "Wrong Name"
     if initial == "random":
-        for i in range(len(D)+1):
+        for i in range(len(bond_dims)+1):
             if i == 0:
-                A = Node(node_name+f"{i}",2,[D[i],2],np.random.randn(D[i],2) + 1j * np.random.randn(D[i],2))
+                A = Node(node_name+f"{i}",2,[bond_dims[i],2],np.random.randn(bond_dims[i],2) + 1j * np.random.randn(bond_dims[i],2))
                 N.add_node(A)
-            elif i == len(D):
-                tensor = random_isometry(D[i-1],2)
-                A = Node(node_name+f"{i}",2,[D[i-1],2],tensor.reshape(D[i-1],2))
+            elif i == len(bond_dims):
+                tensor = random_isometry(bond_dims[i-1],2)
+                A = Node(node_name+f"{i}",2,[bond_dims[i-1],2],tensor.reshape(bond_dims[i-1],2))
                 N.add_node(A)
                 idx = 0 if (i-1 == 0) else 2
                 N.add_to_node(node_name+f"{i-1}",node_name+f"{i}",idx,0)
             else:
-                tensor = random_isometry(D[i-1],2*D[i])
+                tensor = random_isometry(bond_dims[i-1],2*bond_dims[i])
                 # print(tensor.shape)
-                A = Node(node_name+f"{i}",3,[D[i-1],2,D[i]],tensor.reshape(D[i-1],2,D[i]))
+                A = Node(node_name+f"{i}",3,[bond_dims[i-1],2,bond_dims[i]],tensor.reshape(bond_dims[i-1],2,bond_dims[i]))
                 N.add_node(A)
                 idx = 0 if (i-1 == 0) else 2
                 N.add_to_node(node_name+f"{i-1}",node_name+f"{i}",idx,0)
                 # N.print_network()    
     
     if initial == "zero":
-        for i in range(len(D)+1):
+        for i in range(len(bond_dims)+1):
             if i == 0:
-                tensor = np.zeros((D[i], 2), dtype=complex)
+                tensor = np.zeros((bond_dims[i], 2), dtype=complex)
                 tensor[0, 0] = 1.0
-                A = Node(node_name+f"{i}",2,[D[i],2],tensor)
+                A = Node(node_name+f"{i}",2,[bond_dims[i],2],tensor)
                 N.add_node(A)
-            elif i == len(D):
-                tensor = np.zeros((D[i-1], 2), dtype=complex)
+            elif i == len(bond_dims):
+                tensor = np.zeros((bond_dims[i-1], 2), dtype=complex)
                 tensor[0, 0] = 1.0
-                A = Node(node_name+f"{i}",2,[D[i-1],2],tensor)
+                A = Node(node_name+f"{i}",2,[bond_dims[i-1],2],tensor)
                 N.add_node(A)
                 idx = 0 if (i-1 == 0) else 2
                 N.add_to_node(node_name+f"{i-1}",node_name+f"{i}",idx,0)
             else:
-                tensor = np.zeros((D[i-1], 2, D[i]), dtype=complex)
+                tensor = np.zeros((bond_dims[i-1], 2, bond_dims[i]), dtype=complex)
                 tensor[0, 0, 0] = 1.0
-                A = Node(node_name+f"{i}",3,[D[i-1],2,D[i]],tensor)
+                A = Node(node_name+f"{i}",3,[bond_dims[i-1],2,bond_dims[i]],tensor)
                 N.add_node(A)
                 idx = 0 if (i-1 == 0) else 2
                 N.add_to_node(node_name+f"{i-1}",node_name+f"{i}",idx,0)    

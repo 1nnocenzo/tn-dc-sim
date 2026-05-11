@@ -369,21 +369,20 @@ def _apply_mps_bra_symmetry_breaking_perturbation(bra):
 
 
 def _apply_tree_bra_symmetry_breaking_perturbation(bra):
-    # Mirrors MPS zero-state perturbation for TTN initialization.
     _apply_bra_symmetry_breaking_perturbation(bra, _TREE_ZERO_BRA_PERTURB_EPS)
 
 
-def _initialize_ket_bra(network_type, no_qubits, D, network_structure, bra_initial="random"):
+def _initialize_ket_bra(network_type, no_qubits, bond_dims, network_structure, bra_initial="random"):
     if network_type == "tree":
         assert no_qubits == network_structure[-1], "Number of qubits mismatch"
-        ket = Tree(D, "Ket", 0, "zero", network_structure)
-        bra = Tree(D, "Bra", ket.rank_all + 1, bra_initial, network_structure)
+        ket = Tree(bond_dims, "Ket", 0, "zero", network_structure)
+        bra = Tree(bond_dims, "Bra", ket.rank_all + 1, bra_initial, network_structure)
         if bra_initial == "zero":
             _apply_tree_bra_symmetry_breaking_perturbation(bra)
     elif network_type == "mps":
-        assert no_qubits == len(D) + 1, "Number of qubits mismatch"
-        ket = MPS(D, "Ket", 0, "zero")
-        bra = MPS(D, "Bra", ket.rank_all + 1, bra_initial)
+        assert no_qubits == len(bond_dims) + 1, "Number of qubits mismatch"
+        ket = MPS(bond_dims, "Ket", 0, "zero")
+        bra = MPS(bond_dims, "Bra", ket.rank_all + 1, bra_initial)
         if bra_initial == "zero":
             _apply_mps_bra_symmetry_breaking_perturbation(bra)
     else:
@@ -464,6 +463,8 @@ def _build_chunk_ir_from_operations(no_qubits, operations):
 
 
 def _apply_ir_chunk_with_dmrg(ket, bra, chunk_ir, no_qubits, no_sweeps, network_type):
+    # if network_type == "mps":
+    #     _apply_mps_bra_symmetry_breaking_perturbation(bra)
     circ = circuit_from_ir(bra.rank_all + 1, chunk_ir)
     N = full_network_from_edge_list(ket, circ, bra, no_qubits)
     f = sweep(no_sweeps, N, bra, network_type=network_type)
@@ -656,10 +657,10 @@ def _memory_stats_payload(final_elements, peak_elements):
     }
 
 
-def DMRG_dynamic_all_branches_from_circuit_ir(
-    compression_steps,
+def DMRG_dynamic_multi_branches_from_circuit_ir(
+    chunk_size,
     no_sweeps,
-    D,
+    bond_dims,
     network_structure,
     circuit_ir,
     network_type,
@@ -695,7 +696,7 @@ def DMRG_dynamic_all_branches_from_circuit_ir(
             Optional outputs include pruning error, per-branch data, and final samples.
     """
     assert no_sweeps % 2 == 0 and no_sweeps > 0, "Number of sweeps must be a positive even integer"
-    assert compression_steps >= 1, "compression_steps must be >= 1"
+    assert chunk_size >= 1, "chunk_size must be >= 1"
     assert isinstance(circuit_ir, CircuitIR), "circuit_ir must be a CircuitIR instance"
     assert probability_cutoff >= 0.0, "probability_cutoff must be >= 0"
     if max_branches is not None:
@@ -709,7 +710,7 @@ def DMRG_dynamic_all_branches_from_circuit_ir(
     no_clbits = circuit_ir.no_clbits
 
     ket, bra = _initialize_ket_bra(
-        network_type, no_qubits, D, network_structure, bra_initial="zero"
+        network_type, no_qubits, bond_dims, network_structure, bra_initial="zero"
     )
     _update_ket_with_bra_conjugate(ket, bra)
 
@@ -846,7 +847,7 @@ def DMRG_dynamic_all_branches_from_circuit_ir(
 
             assert len(op.qubits) > 0 and len(op.qubits) <= 2, "Dynamic path supports only 1- and 2-qubit unitary ops"
             branch["unitary_buffer"].append(op)
-            if len(branch["unitary_buffer"]) >= compression_steps:
+            if len(branch["unitary_buffer"]) >= chunk_size:
                 _flush_dynamic_branch_unitary_buffer(branch, no_qubits, no_sweeps, network_type)
             next_branches.append(branch)
 
@@ -886,12 +887,15 @@ def DMRG_dynamic_all_branches_from_circuit_ir(
     elif surviving_mass <= 0.0:
         final_fidelity = 0.0
     else:
-        final_fidelity = float(
-            sum(
-                (float(b["weight"]) / surviving_mass) * _branch_final_fidelity(b)
-                for b in branches
-            )
-        )
+        # Final fidelity sum over branches divided by number of survived branches
+        final_fidelity = float(sum(_branch_final_fidelity(b) for b in branches) / len(branches))
+
+        # final_fidelity = float(
+        #     sum(
+        #         (float(b["weight"]) / surviving_mass) * _branch_final_fidelity(b)
+        #         for b in branches
+        #     )
+        # )
 
     counts = None
     shots = None
@@ -950,10 +954,10 @@ def DMRG_dynamic_all_branches_from_circuit_ir(
     return tuple(outputs)
 
 
-def DMRG_dynamic_all_branches_from_qasm3(
-    compression_steps,
+def DMRG_dynamic_multi_branches_from_qasm3(
+    chunk_size,
     no_sweeps,
-    D,
+    bond_dims,
     network_structure,
     qasm_text,
     network_type,
@@ -984,10 +988,10 @@ def DMRG_dynamic_all_branches_from_qasm3(
         optimization_level=optimization_level,
         allow_dynamic=True,
     )
-    return DMRG_dynamic_all_branches_from_circuit_ir(
-        compression_steps=compression_steps,
+    return DMRG_dynamic_multi_branches_from_circuit_ir(
+        chunk_size=chunk_size,
         no_sweeps=no_sweeps,
-        D=D,
+        bond_dims=bond_dims,
         network_structure=network_structure,
         circuit_ir=circuit_ir,
         network_type=network_type,
@@ -1007,18 +1011,18 @@ def DMRG_dynamic_all_branches_from_qasm3(
     )
 
 
-def DMRG_dynamic_single_path_from_circuit_ir(compression_steps, no_sweeps, D, network_structure, circuit_ir, network_type, seed=None, return_state=False, return_bra=False, return_classical_bits=False, return_branch_probability=False, n_samples_final=None, return_counts=False, return_shots=False, return_memory_stats=False):
+def DMRG_dynamic_single_path_from_circuit_ir(chunk_size, no_sweeps, bond_dims, network_structure, circuit_ir, network_type, seed=None, return_state=False, return_bra=False, return_classical_bits=False, return_branch_probability=False, n_samples_final=None, return_counts=False, return_shots=False, return_memory_stats=False):
     """
     Single-path dynamic simulation using TTN/MPS + DMRG chunks.
 
-    `compression_steps` is interpreted as the maximum number of unitary
+    `chunk_size` is interpreted as the maximum number of unitary
     operations accumulated in a chunk before running a DMRG sweep.
     Non-unitary ops (measure/reset) always flush the current unitary chunk.
     `return_shots` returns sampled bitstrings, while
     `return_memory_stats` returns tensor-memory stats.
     """
     assert no_sweeps % 2 == 0 and no_sweeps > 0, "Number of sweeps must be a positive even integer"
-    assert compression_steps >= 1, "compression_steps must be >= 1"
+    assert chunk_size >= 1, "chunk_size must be >= 1"
     assert isinstance(circuit_ir, CircuitIR), "circuit_ir must be a CircuitIR instance"
     if return_counts or return_shots:
         assert n_samples_final is not None and n_samples_final > 0, "n_samples_final must be set when requesting final sampling"
@@ -1026,7 +1030,7 @@ def DMRG_dynamic_single_path_from_circuit_ir(compression_steps, no_sweeps, D, ne
     no_qubits = circuit_ir.no_qubits
     no_clbits = circuit_ir.no_clbits
 
-    ket, bra = _initialize_ket_bra(network_type, no_qubits, D, network_structure, bra_initial="zero")
+    ket, bra = _initialize_ket_bra(network_type, no_qubits, bond_dims, network_structure, bra_initial="zero")
     _update_ket_with_bra_conjugate(ket, bra)
 
     classical_bits = np.zeros(no_clbits, dtype=int)
@@ -1097,7 +1101,7 @@ def DMRG_dynamic_single_path_from_circuit_ir(compression_steps, no_sweeps, D, ne
 
         assert len(op.qubits) > 0 and len(op.qubits) <= 2, "Dynamic path supports only 1- and 2-qubit unitary ops"
         unitary_buffer.append(op)
-        if len(unitary_buffer) >= compression_steps:
+        if len(unitary_buffer) >= chunk_size:
             flush_unitary_chunk()
             if return_memory_stats:
                 peak_memory_footprint = max(
@@ -1150,7 +1154,7 @@ def DMRG_dynamic_single_path_from_circuit_ir(compression_steps, no_sweeps, D, ne
     return tuple(outputs)
 
 
-def DMRG_dynamic_single_path_from_qasm3(compression_steps, no_sweeps, D, network_structure, qasm_text, network_type, seed=None, return_state=False, return_bra=False, return_classical_bits=False, return_branch_probability=False, basis_gates=None, apply_transpile=False, optimization_level=0, n_samples_final=None, return_counts=False, return_shots=False, return_memory_stats=False):
+def DMRG_dynamic_single_path_from_qasm3(chunk_size, no_sweeps, bond_dims, network_structure, qasm_text, network_type, seed=None, return_state=False, return_bra=False, return_classical_bits=False, return_branch_probability=False, basis_gates=None, apply_transpile=False, optimization_level=0, n_samples_final=None, return_counts=False, return_shots=False, return_memory_stats=False):
     """
     Parses dynamic OpenQASM 3 into CircuitIR and runs single-path dynamic TTN/MPS simulation.
     """
@@ -1162,9 +1166,9 @@ def DMRG_dynamic_single_path_from_qasm3(compression_steps, no_sweeps, D, network
         allow_dynamic=True,
     )
     return DMRG_dynamic_single_path_from_circuit_ir(
-        compression_steps=compression_steps,
+        chunk_size=chunk_size,
         no_sweeps=no_sweeps,
-        D=D,
+        bond_dims=bond_dims,
         network_structure=network_structure,
         circuit_ir=circuit_ir,
         network_type=network_type,
@@ -1179,261 +1183,3 @@ def DMRG_dynamic_single_path_from_qasm3(compression_steps, no_sweeps, D, network
         return_memory_stats=return_memory_stats,
     )
 
-
-def DMRG_from_circuit_ir(compression_steps, no_sweeps, D, network_structure, circuit_ir, network_type, return_state=False, return_bra=False, n_samples_final=None, seed=None, return_counts=False, return_shots=False):
-    """
-    Runs DMRG compression for a generic non-dynamic CircuitIR.
-
-    Args:
-        compression_steps (int): Maximum number of unitary operations per chunk.
-        no_sweeps (int): Number of sweeps for each chunk.
-        D (list): Bond dimensions for TTN/MPS.
-        network_structure (list): TTN hierarchy, ignored for MPS except for validation.
-        circuit_ir (CircuitIR): Input circuit in internal representation.
-        network_type (str): 'tree' or 'mps'.
-
-    Returns:
-        float | tuple: Final cumulative fidelity, optionally with final state vector and/or bra network.
-    """
-    assert no_sweeps % 2 == 0, "Number of sweeps must be even"
-    assert compression_steps >= 1, "compression_steps must be >= 1"
-    assert isinstance(circuit_ir, CircuitIR), "circuit_ir must be a CircuitIR instance"
-    assert circuit_ir.no_clbits == 0, "Non-dynamic path does not support classical bits"
-    if return_counts or return_shots:
-        assert n_samples_final is not None and n_samples_final > 0, "n_samples_final must be set when requesting final sampling"
-
-    no_qubits = circuit_ir.no_qubits
-    ket, bra = _initialize_ket_bra(network_type, no_qubits, D, network_structure, bra_initial="zero")
-    _update_ket_with_bra_conjugate(ket, bra)
-
-    fidelity_terms = []
-    unitary_buffer = []
-
-    def flush_unitary_chunk():
-        nonlocal unitary_buffer
-        if len(unitary_buffer) == 0:
-            return
-        chunk_ir = _build_chunk_ir_from_operations(no_qubits, unitary_buffer)
-        F_ = _apply_ir_chunk_with_dmrg(ket, bra, chunk_ir, no_qubits, no_sweeps, network_type)
-        fidelity_terms.append(F_)
-        _update_ket_with_bra_conjugate(ket, bra)
-        unitary_buffer = []
-
-    for op in circuit_ir.operations:
-        assert op.condition is None, "Non-dynamic path does not support classically conditioned operations"
-        assert len(op.clbits) == 0, "Non-dynamic path does not support classical-bit operands in operations"
-        unitary_buffer.append(op)
-        if len(unitary_buffer) >= compression_steps:
-            flush_unitary_chunk()
-
-    flush_unitary_chunk()
-
-    if len(fidelity_terms) == 0:
-        final_fidelity = 1.0
-    else:
-        final_fidelity = np.cumprod(np.array(fidelity_terms))[-1]
-
-    need_state = return_state or return_counts or return_shots
-    final_state = None
-    if need_state:
-        final_state = _state_vector_from_bra(bra, no_qubits)
-
-    counts = None
-    shots = None
-    if return_counts or return_shots:
-        counts, shots = _sample_measurements_from_state(
-            final_state, no_qubits, n_samples_final, seed=seed, return_shots=return_shots
-        )
-
-    outputs = [final_fidelity]
-    if return_state:
-        outputs.append(final_state)
-    if return_bra:
-        outputs.append(bra)
-    if return_counts:
-        outputs.append(counts)
-    if return_shots:
-        outputs.append(shots)
-
-    if len(outputs) == 1:
-        return outputs[0]
-    return tuple(outputs)
-
-
-def DMRG_from_qasm3(compression_steps, no_sweeps, D, network_structure, qasm_text, network_type, basis_gates=None, apply_transpile=True, optimization_level=0, return_state=False, return_bra=False, n_samples_final=None, seed=None, return_counts=False, return_shots=False):
-    """
-    Parses OpenQASM 3 into CircuitIR and runs DMRG_from_circuit_ir.
-    """
-    circuit_ir = qasm3_to_circuit_ir(
-        qasm_text,
-        basis_gates=basis_gates,
-        apply_transpile=apply_transpile,
-        optimization_level=optimization_level,
-    )
-    return DMRG_from_circuit_ir(
-        compression_steps=compression_steps,
-        no_sweeps=no_sweeps,
-        D=D,
-        network_structure=network_structure,
-        circuit_ir=circuit_ir,
-        network_type=network_type,
-        return_state=return_state,
-        return_bra=return_bra,
-        n_samples_final=n_samples_final,
-        seed=seed,
-        return_counts=return_counts,
-        return_shots=return_shots,
-    )
-
-def DMRG(compression_steps,depth, no_sweeps,no_qubits,D,network_structure,full_edge_list, network_type,circuit_type,run, return_state=False, return_bra=False, n_samples_final=None, seed=None, return_counts=False, return_shots=False):
-    """
-    Orchestrates a full quantum circuit simulation using partitioned
-    circuits and DMRG-style compression.
-
-    Args:
-        compression_steps (int): How many partitions to divide the circuit into at each depth.
-        depth (int): The number of layers in the quantum algorithm (e.g., p in QAOA).
-        no_sweeps (int): The number of sweeps for the `sweep` optimizer.
-        no_qubits (int): The total number of qubits.
-        D (list): A list of bond dimensions for the tensor network.
-        network_structure (list): The hierarchical structure for a Tree Tensor Network.
-        full_edge_list (list): The list of all edges defining two-qubit gate locations.
-        network_type (str): The type of tensor network ('tree' or 'mps').
-        circuit_type (str): The type of circuit ('qaoa' or 'random').
-        run (int): The current run number, used for seeding random number generators.
-
-    Returns:
-        float: The final cumulative fidelity of the simulation.
-    """
-    assert no_sweeps%2 ==0, "Number of sweeps must be even"
-    if return_counts or return_shots:
-        assert n_samples_final is not None and n_samples_final > 0, "n_samples_final must be set when requesting final sampling"
-
-    print(f" Total Compression Step = {compression_steps*depth} and network = {network_type} and nodes: {network_structure}" )
-    
-    Fid = []
-    partial_edge_list = partition_into_k_parts(full_edge_list, compression_steps)
- 
-    for d in range(depth):
-        assert circuit_type == "qaoa" or circuit_type == "random", "Wrong circuit type"
-        single_qubit_ket = np.identity(2)
-        if circuit_type == "random":
-            two_qubit_gate = None
-            single_qubit_bra = np.identity(2)
-        else: 
-            
-            if d==0:
-                single_qubit_ket =  hadamard_gate()
-            np.random.seed(d + run*10)
-            two_qubit_gate = ZZ_QAOA((np.random.uniform(0, 2*np.pi)))
-            if compression_steps == 1:
-                np.random.seed(d+1+run*10)
-                single_qubit_bra = X_QAOA((np.random.uniform(0, np.pi)))
-            else:
-                single_qubit_bra =np.identity(2)
-                
-        
-        if network_type == "tree":
-            assert no_qubits == network_structure[-1], "Number of qubits mismatch"
-            if d==0:
-                ket = Tree(D,"Ket",0,"zero",network_structure)
-                bra = Tree(D,"Bra",ket.rank_all+1,"random",network_structure)
-            else:
-                for (ket_name, ket_node), (bra_name, bra_node) in zip(ket.nodes.items(), bra.nodes.items()):
-                    assert bra_name[3:] == ket_name[3:], "Wrong ket/bra"
-                    ket.replace_tensor(ket_name, np.conjugate(bra_node.tensor))
-            circ = circuit_from_edge_list(bra.rank_all+1,partial_edge_list[0],no_qubits,single_qubit_ket,single_qubit_bra,circuit_type,two_qubit_gate)
-            print("Number of 2 qubit gates:",len(partial_edge_list[0]))
-            N = full_network_from_edge_list(ket,circ,bra,no_qubits)
-            print("Memory = ", bra.memory_footprint())
-            start_time = time.time()
-            f = sweep(no_sweeps,N,bra, network_type=network_type)
-            F_ = np.max(f[-1,:])
-            Fid.append(F_)
-
-        elif network_type == 'mps':
-
-            assert no_qubits == len(D)+1, "Number of qubits mismatch"
-            if d == 0:
-                ket = MPS(D,"Ket",0,"zero")
-                bra = MPS(D,"Bra",ket.rank_all+1,"random")
-            else:
-                for (ket_name, ket_node), (bra_name, bra_node) in zip(ket.nodes.items(), bra.nodes.items()):
-                    assert bra_name[3:] == ket_name[3:], "Wrong ket/bra"
-                    ket.replace_tensor(ket_name, np.conjugate(bra_node.tensor))
-            circ = circuit_from_edge_list(bra.rank_all+1,partial_edge_list[0],no_qubits,single_qubit_ket,single_qubit_bra,circuit_type,two_qubit_gate)
-
-            print("Number of 2 qubit gates:",len(partial_edge_list[0]))
-            N = full_network_from_edge_list(ket,circ,bra,no_qubits)
-            print("Memory = ", bra.memory_footprint())
-            start_time = time.time()
-            f = sweep(no_sweeps,N,bra, network_type=network_type)
-            F_ = np.max(f[-1,:])
-            Fid.append(F_)
-
-        print(f"Compression step = {1} and Depth = {d+1}; Fidelity = {np.cumprod(np.array(Fid))[-1]}; sweep time = {time.time() - start_time}")
-
-        for i in range(compression_steps-1):
-            if circuit_type == "random":
-                two_qubit_gate = None
-                single_qubit_ket = np.identity(2)
-                single_qubit_bra = np.identity(2)
-            else:
-                single_qubit_ket =  np.identity(2)
-                if i == compression_steps-2:
-                    np.random.seed(d+1+run*10)
-                    single_qubit_bra = X_QAOA((np.random.uniform(0, np.pi)))
-                else:
-                    single_qubit_bra =np.identity(2)
-            del circ
-            del N
-            gc.collect()
-            
-            for (ket_name, ket_node), (bra_name, bra_node) in zip(ket.nodes.items(), bra.nodes.items()):
-                assert bra_name[3:] == ket_name[3:], "Wrong ket/bra"
-                ket.replace_tensor(ket_name, np.conjugate(bra_node.tensor))
-
-            circ = circuit_from_edge_list(bra.rank_all+1,partial_edge_list[i+1],no_qubits,single_qubit_ket,single_qubit_bra,circuit_type,two_qubit_gate)
-            N = full_network_from_edge_list(ket,circ,bra,no_qubits)
-            
-            print("Number of 2 qubit gates:",len(partial_edge_list[i+1]))
-
-            start_time = time.time()
-            f = sweep(no_sweeps,N,bra, network_type=network_type)
-            F_ = np.max(f[-1,:])
-            Fid.append(F_)
-
-            print(f"Compression step = {i+2}  and Depth = {d+1}; Fidelity = {np.cumprod(np.array(Fid))[-1]}; sweep time = {time.time() - start_time}")
-        
-        del circ
-        del N
-        gc.collect()
-
-
-    final_fidelity = np.cumprod(np.array(Fid))[-1]
-
-    need_state = return_state or return_counts or return_shots
-    final_state = None
-    if need_state:
-        final_state = _state_vector_from_bra(bra, no_qubits)
-
-    counts = None
-    shots = None
-    if return_counts or return_shots:
-        counts, shots = _sample_measurements_from_state(
-            final_state, no_qubits, n_samples_final, seed=seed, return_shots=return_shots
-        )
-
-    outputs = [final_fidelity]
-    if return_state:
-        outputs.append(final_state)
-    if return_bra:
-        outputs.append(bra)
-    if return_counts:
-        outputs.append(counts)
-    if return_shots:
-        outputs.append(shots)
-
-    if len(outputs) == 1:
-        return outputs[0]
-    return tuple(outputs)

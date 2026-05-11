@@ -51,7 +51,11 @@ def load_results(path: Path) -> list[dict[str, object]]:
         parsed_row["no_qubits"] = int(parsed_row["no_qubits"])
         parsed_row["depth"] = int(parsed_row["depth"])
         parsed_row["Dmax"] = int(parsed_row["Dmax"])
-        parsed_row["compression_steps"] = int(parsed_row["compression_steps"])
+        if "chunk_size" in parsed_row and parsed_row["chunk_size"] not in {None, ""}:
+            parsed_row["chunk_size"] = int(parsed_row["chunk_size"])
+        else:
+            # Backward compatibility with older benchmark CSVs.
+            parsed_row["chunk_size"] = int(parsed_row["compression_steps"])
         parsed_row["no_sweeps"] = int(parsed_row["no_sweeps"])
         parsed_row["max_ops_per_branch"] = int(parsed_row["max_ops_per_branch"])
         parsed_row["single_path_repeat_count"] = int(parsed_row["single_path_repeat_count"])

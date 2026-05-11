@@ -1,7 +1,7 @@
 """Scaling benchmark for dynamic random circuits.
 
 This script sweeps circuit size, depth, seed, bond dimension, tensor-network
-type, compression steps, and tree structure. It compares the single-path and
+type, chunk size, and tree structure. It compares the single-path and
 multi-path dynamic simulators on the same family of randomly generated dynamic
 circuits.
 
@@ -23,18 +23,13 @@ from pathlib import Path
 
 import numpy as np
 from qiskit import qasm3, transpile
-from qiskit.circuit.random import random_circuit as random_circuit_qiskit
-
-
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.simulation import (  # noqa: E402
-    DMRG_dynamic_all_branches_from_qasm3,
+    DMRG_dynamic_multi_branches_from_qasm3,
     DMRG_dynamic_single_path_from_qasm3,
-    DMRG_from_qasm3,
 )
 from src.utils.TN_gen import D_mps, D_tree  # noqa: E402
 from src.utils.my_random_circuit import random_circuit  # noqa: E402
@@ -48,7 +43,7 @@ class ScalingRow:
     network_type: str
     network_structure: str
     Dmax: int
-    compression_steps: int
+    chunk_size: int
     no_sweeps: int
     max_ops_per_branch: int
     single_path_repeat_count: int
@@ -279,10 +274,10 @@ def characterize_random_circuits(
 
 def run_single_path(
     qasm_text: str,
-    D,
+    bond_dims,
     network_structure: list[int],
     network_type: str,
-    compression_steps: int,
+    chunk_size: int,
     no_sweeps: int,
     repeat_count: int,
     base_seed: int,
@@ -299,9 +294,9 @@ def run_single_path(
         run_seed = base_seed * 10_000 + repeat
         start = time.perf_counter()
         fidelity, branch_probability, memory_stats = DMRG_dynamic_single_path_from_qasm3(
-            compression_steps=compression_steps,
+            chunk_size=chunk_size,
             no_sweeps=no_sweeps,
-            D=D,
+            bond_dims=bond_dims,
             network_structure=network_structure,
             qasm_text=qasm_text,
             network_type=network_type,
@@ -330,20 +325,20 @@ def run_single_path(
 
 def run_multi_path(
     qasm_text: str,
-    D,
+    bond_dims,
     network_structure: list[int],
     network_type: str,
-    compression_steps: int,
+    chunk_size: int,
     no_sweeps: int,
     base_seed: int,
     max_branches: int | None,
     probability_cutoff: float,
 ) -> tuple[float, float, float, int, dict[str, int]]:
     start = time.perf_counter()
-    fidelity, pruning_error, branches, memory_stats = DMRG_dynamic_all_branches_from_qasm3(
-        compression_steps=compression_steps,
+    fidelity, pruning_error, branches, memory_stats = DMRG_dynamic_multi_branches_from_qasm3(
+        chunk_size=chunk_size,
         no_sweeps=no_sweeps,
-        D=D,
+        bond_dims=bond_dims,
         network_structure=network_structure,
         qasm_text=qasm_text,
         network_type=network_type,
@@ -369,7 +364,7 @@ def count_total_configurations(args: argparse.Namespace) -> int:
                     total += (
                         len(structures)
                         * len(args.dmax)
-                        * len(args.compression_steps)
+                        * len(args.chunk_size)
                         * len(args.no_sweeps)
                     )
     return total
@@ -390,11 +385,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--dmax", type=int, nargs="+", default=[8,16,32], help="Bond dimensions to test.")
     parser.add_argument(
+        "--chunk-size",
         "--compression-steps",
+        dest="chunk_size",
         type=int,
         nargs="+",
         default=[20],
-        help="Compression steps to test.",
+        help="Chunk sizes to test.",
     )
     parser.add_argument("--no-sweeps", type=int, nargs="+", default=[2], help="Sweep counts to test.")
     parser.add_argument(
@@ -488,28 +485,19 @@ def main() -> None:
                         structure_string = json.dumps(structure)
                         for dmax in args.dmax:
                             if network_type == "tree":
-                                D = D_tree(structure, dmax)
+                                bond_dims = D_tree(structure, dmax)
                             else:
-                                D = D_mps(no_qubits, dmax)
+                                bond_dims = D_mps(no_qubits, dmax)
 
-                            for compression_steps in args.compression_steps:
+                            for chunk_size in args.chunk_size:
                                 for no_sweeps in args.no_sweeps:
                                     config_index += 1
                                     print(
                                         f"\nConfiguration {config_index}/{total_configurations}: "
                                         f"qubits={no_qubits}, depth={depth}, size={circuit_size}, seed={seed}, "
                                         f"network_type={network_type}, structure={structure_string}, "
-                                        f"Dmax={dmax}, compression_steps={compression_steps}, no_sweeps={no_sweeps}"
+                                        f"Dmax={dmax}, chunk_size={chunk_size}, no_sweeps={no_sweeps}"
                                     )
-                                    '''
-                                    DMRG_from_qasm3(qasm_text=qasm_text,
-                                        D=D,
-                                        network_structure=structure,
-                                        network_type=network_type,
-                                        compression_steps=compression_steps,
-                                        no_sweeps=no_sweeps)
-                                    exit()
-                                    '''
                                     (
                                         single_fidelities,
                                         single_branch_probs,
@@ -520,10 +508,10 @@ def main() -> None:
                                         single_peak_bytes_estimate,
                                     ) = run_single_path(
                                         qasm_text=qasm_text,
-                                        D=D,
+                                        bond_dims=bond_dims,
                                         network_structure=structure,
                                         network_type=network_type,
-                                        compression_steps=compression_steps,
+                                        chunk_size=chunk_size,
                                         no_sweeps=no_sweeps,
                                         repeat_count=args.single_path_repeats,
                                         base_seed=seed,
@@ -536,10 +524,10 @@ def main() -> None:
                                         multi_memory_stats,
                                     ) = run_multi_path(
                                         qasm_text=qasm_text,
-                                        D=D,
+                                        bond_dims=bond_dims,
                                         network_structure=structure,
                                         network_type=network_type,
-                                        compression_steps=compression_steps,
+                                        chunk_size=chunk_size,
                                         no_sweeps=no_sweeps,
                                         base_seed=seed,
                                         max_branches=args.max_branches,
@@ -554,7 +542,7 @@ def main() -> None:
                                         network_type=network_type,
                                         network_structure=structure_string,
                                         Dmax=dmax,
-                                        compression_steps=compression_steps,
+                                        chunk_size=chunk_size,
                                         no_sweeps=no_sweeps,
                                         max_ops_per_branch=args.max_ops_per_branch,
                                         single_path_repeat_count=args.single_path_repeats,
