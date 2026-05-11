@@ -19,8 +19,6 @@ Install all the required dependencies with `pip install -r requirements.txt`.
 |----------------------|--------------------------------------------------------------------------------------------------|
 | `no_qubits`          | Total number of qubits in the circuit. |
 | `qubit_graph`        | Connectivity graph of qubits. e.g. nearest neighbour, 3-regular etc. (See `graph_gen.py`) |
-| `circuit_type`       | Type of quantum circuit to simulate. Options include `"random"` for random unitary circuit, or `"qaoa"` for QAOA solving MaxCut problem. |
-| `Depth`              | Circuit depth, i.e., the number of times the qubit graph is repeated to form the full circuit.|
 | `network_type`       | Tensor network representation: `"tree"` for Tree Tensor Network (TTN) or `"mps"` for Matrix Product State (MPS) |
 | `qubit_order`        | Qubit ordering strategy used in TTN construction. `"Naive"` or`"Blind"`(see Sec. III B [arXiv:2504.16718](https://arxiv.org/abs/2504.16718)). |
 | `network_structure`  | Defines the hierarchical structure of the TTN, e.g., `[1, 3, 9, 27]` for a ternary tree, `[1, 2, 4, 8, 16]` for a binary tree.  |
